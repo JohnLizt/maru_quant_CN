@@ -1,0 +1,184 @@
+# A股量化系统 - Docker Compose
+# 组件: TimescaleDB | Redis | Jupyter | Grafana
+
+networks:
+  quant_net:
+    driver: bridge
+
+volumes:
+  timescaledb_data:
+  redis_data:
+  grafana_data:
+  qlib_data:
+
+services:
+  # ─────────────────────────────────────────
+  # 1. TimescaleDB (PostgreSQL + 时序扩展)
+  # ─────────────────────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: quant_timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-quant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quantpass}
+      POSTGRES_DB: ${POSTGRES_DB:-quant_db}
+      TIMESCALEDB_TELEMETRY: "off"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./docker/timescaledb/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "${TIMESCALEDB_PORT:-5432}:5432"
+    networks:
+      - quant_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-quant} -d ${POSTGRES_DB:-quant_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ─────────────────────────────────────────
+  # 2. Redis (缓存 + 任务队列)
+  # ─────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: quant_redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redispass} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - quant_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redispass}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ─────────────────────────────────────────
+  # 3. 主应用容器 (Tushare + Polars + Qlib)
+  # ─────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - PYTHON_VERSION=3.11
+    container_name: quant_app
+    restart: unless-stopped
+    environment:
+      # 数据库
+      POSTGRES_HOST: timescaledb
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-quant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quantpass}
+      POSTGRES_DB: ${POSTGRES_DB:-quant_db}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quantpass}@timescaledb:5432/${POSTGRES_DB:-quant_db}
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redispass}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redispass}@redis:6379/0
+      # Tushare
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      # Qlib
+      QLIB_DATA_DIR: /app/qlib_data
+      # Python
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: /app
+      TZ: Asia/Shanghai
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: timescaledb,redis,localhost,127.0.0.1
+    volumes:
+      - ./app:/app/app              # 源代码热重载
+      - ./notebooks:/app/notebooks
+      - ./config:/app/config
+      - ./scripts:/app/scripts
+      - qlib_data:/app/qlib_data
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - quant_net
+    # 默认保持容器运行，可按需执行具体命令
+    command: ["tail", "-f", "/dev/null"]
+
+  # ─────────────────────────────────────────
+  # 4. Jupyter Lab (研究 / 回测环境)
+  # ─────────────────────────────────────────
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: quant_jupyter
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: timescaledb
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-quant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quantpass}
+      POSTGRES_DB: ${POSTGRES_DB:-quant_db}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quantpass}@timescaledb:5432/${POSTGRES_DB:-quant_db}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redispass}@redis:6379/0
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      QLIB_DATA_DIR: /app/qlib_data
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-quanttoken}
+      PYTHONPATH: /app
+      TZ: Asia/Shanghai
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: timescaledb,redis,localhost,127.0.0.1
+    volumes:
+      - ./app:/app/app
+      - ./notebooks:/app/notebooks
+      - ./config:/app/config
+      - qlib_data:/app/qlib_data
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - quant_net
+    command:
+      - jupyter
+      - lab
+      - --ip=0.0.0.0
+      - --port=8888
+      - --no-browser
+      - --allow-root
+      - --notebook-dir=/app/notebooks
+      - --ServerApp.token=${JUPYTER_TOKEN:-quanttoken}
+
+  # ─────────────────────────────────────────
+  # 5. Grafana (行情可视化监控)
+  # ─────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: quant_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-grafanapass}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_PORT:-3000}
+      # 预配置 TimescaleDB 数据源
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - timescaledb
+    networks:
+      - quant_net

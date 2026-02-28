@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  - name: TimescaleDB
+    type: postgres
+    url: timescaledb:5432
+    database: ${POSTGRES_DB:-quant_db}
+    user: ${POSTGRES_USER:-quant}
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD:-quantpass}
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+    isDefault: true
+    editable: true
