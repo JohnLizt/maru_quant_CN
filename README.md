@@ -97,6 +97,53 @@ docker compose down
 docker compose down -v
 ```
 
+## 每日 ETL
+
+```bash
+# 每日增量更新（默认检查最近 7 个自然日，自动补全孔洞）
+docker compose exec app bash scripts/etl_daily.sh
+
+# 每周对账：检查最近 30 天
+docker compose exec app bash scripts/etl_daily.sh --lookback-days 30
+
+# 查看同步状态
+docker compose exec timescaledb psql -U quant -d quant_db \
+  -c "SELECT data_type, last_date, status, error_msg, updated_at FROM meta.sync_status;"
+```
+
+### Cron 配置（宿主机，A 股收盘后 17:30 CST = 09:30 UTC）
+
+```cron
+# 每个交易日增量更新
+30 9 * * 1-5  docker compose -f /path/to/docker-compose.yml exec -T app bash scripts/etl_daily.sh
+
+# 每周日对账（30 天回溯）
+0 20 * * 0    docker compose -f /path/to/docker-compose.yml exec -T app bash scripts/etl_daily.sh --lookback-days 30
+```
+
+### ETL 孔洞检测逻辑
+
+每次运行自动对比 `market.daily` 中已有日期与交易日历，仅拉取缺失日期：
+- 正常运行：补齐当日数据
+- API 超时/限频导致漏拉：下次运行自动回填
+- 运行结果写入 `meta.sync_status`（`status='ok'` 或 `'error'`）
+
+### 日志
+
+ETL 日志写入 `logs/` 目录（挂载至容器内 `/app/logs`），按时间戳命名：
+
+```
+logs/
+  etl_daily_20260317_093000.log
+  etl_daily_20260318_093001.log
+  ...
+```
+
+```bash
+# 查看最新 ETL 日志
+tail -f logs/$(ls -t logs/ | head -1)
+```
+
 ## 项目结构
 
 ```
@@ -136,7 +183,11 @@ docker compose down -v
 │       ├── 02_factor_research.ipynb # 因子计算与 IC 分析
 │       └── 03_backtest.ipynb       # 策略信号生成与回测绩效
 │
+├── logs/                       # ETL 运行日志（挂载至容器 /app/logs）
+│
 ├── scripts/
+│   ├── etl_daily.sh            # 每日增量 ETL (孔洞检测 + 自动补全)
+│   ├── etl_daily.py            # ETL 主逻辑 (Python)
 │   ├── init_qlib_data.sh       # Qlib 数据初始化 (一次性)
 │   └── run_factor_pipeline.sh  # 批量运行因子流水线
 │

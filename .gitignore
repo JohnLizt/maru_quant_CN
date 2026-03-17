@@ -28,8 +28,9 @@ data/
 # Qlib 数据
 qlib_data/
 
-# 日志
-logs/
+# 日志（保留目录结构，忽略内容）
+logs/*
+!logs/.gitkeep
 *.log
 
 # IDE

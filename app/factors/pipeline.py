@@ -9,6 +9,7 @@ from loguru import logger
 from sqlalchemy import text
 
 from app.factors.base import BaseFactor
+from app.factors.cross_sectional.cross_sectional import LimitUpFactor
 from app.factors.technical import MA20Factor, MA60Factor, RSIFactor, MACDFactor
 from app.utils.db import get_engine
 
@@ -17,6 +18,7 @@ DEFAULT_FACTORS: list[BaseFactor] = [
     MA60Factor(),
     RSIFactor(),
     MACDFactor(),
+    LimitUpFactor(),
 ]
 
 

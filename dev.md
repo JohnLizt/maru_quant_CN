@@ -1,16 +1,20 @@
 * engineering
 
-  * datasource
+  * ETL
 
-    - [ ] daily CN stock pipeline
+    - [ ] daily pipeline
 
     * [ ] support minute-grain datasource
 
+  * factor
+
+    - [ ] daily factor pipeline
+
   * backtest
 
-    - [ ] signal visulization candle graph
+    - [x] ~~signal visulization candle graph~~
 
-    - [ ] backtest position management
+    - [x] backtest position management
 
     - [x] Qlib integrate
 
@@ -19,7 +23,11 @@
     * [ ] notify
 
 * strategy
-  - [ ] 截面因子
+  - [ ] Cross-sectional
     - [ ] 首版模式
   - [ ] 基本面因子
   - [ ] 另类因子（板块、新闻）
+  - [ ] 割韭菜假设
+    - [ ] 散户情绪
+    - [ ] 主力行为（）
+  - [ ] 小盘股
