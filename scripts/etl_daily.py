@@ -8,8 +8,9 @@
   4. 更新 meta.sync_status
 
 用法：
-  python scripts/etl_daily.py                     # 默认 7 日回溯
-  python scripts/etl_daily.py --lookback-days 30  # 每周对账用
+  python scripts/etl_daily.py                          # 默认 7 日回溯
+  python scripts/etl_daily.py --lookback-days 30       # 每周对账用
+  python scripts/etl_daily.py --force-update           # 强制重新拉取窗口内所有交易日
 """
 from __future__ import annotations
 
@@ -116,7 +117,7 @@ def update_sync_status(engine, status: str, last_date: str | None,
 
 # ── 主流程 ────────────────────────────────────────────────────
 
-def main(lookback_days: int) -> None:
+def main(lookback_days: int, force_update: bool = False) -> None:
     ts.set_token(os.environ["TUSHARE_TOKEN"])
     pro    = ts.pro_api()
     engine = get_engine()
@@ -125,7 +126,8 @@ def main(lookback_days: int) -> None:
     start_str = _yyyymmdd(today - timedelta(days=lookback_days))
     end_str   = _yyyymmdd(today)
 
-    logger.info(f"ETL daily | lookback={lookback_days}d | {start_str} ~ {end_str}")
+    logger.info(f"ETL daily | lookback={lookback_days}d | {start_str} ~ {end_str}"
+                + (" | FORCE" if force_update else ""))
 
     # ── 1. 交易日历 ──────────────────────────────────────────
     trade_dates = get_trading_dates(pro, start_str, end_str)
@@ -135,9 +137,13 @@ def main(lookback_days: int) -> None:
     logger.info(f"交易日: {len(trade_dates)} 个 ({trade_dates[0]} ~ {trade_dates[-1]})")
 
     # ── 2. 孔洞检测 ──────────────────────────────────────────
-    existing = get_existing_dates(engine, start_str, end_str)
-    missing  = [d for d in trade_dates if d not in existing]
-    logger.info(f"DB 已有 {len(existing)} 个交易日，缺失 {len(missing)} 个")
+    if force_update:
+        missing = trade_dates
+        logger.info(f"强制模式：重新拉取全部 {len(missing)} 个交易日")
+    else:
+        existing = get_existing_dates(engine, start_str, end_str)
+        missing  = [d for d in trade_dates if d not in existing]
+        logger.info(f"DB 已有 {len(existing)} 个交易日，缺失 {len(missing)} 个")
 
     if not missing:
         logger.success("数据完整，无需补全")
@@ -174,5 +180,9 @@ if __name__ == "__main__":
         "--lookback-days", type=int, default=7,
         help="回溯天数（默认 7；每周对账用 30）",
     )
+    parser.add_argument(
+        "--force-update", action="store_true",
+        help="强制重新拉取窗口内所有交易日，忽略已有数据",
+    )
     args = parser.parse_args()
-    main(args.lookback_days)
+    main(args.lookback_days, args.force_update)

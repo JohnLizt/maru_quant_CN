@@ -1,14 +1,20 @@
+# TODO
+
 * engineering
 
   * ETL
 
-    - [ ] daily pipeline
+    - [x] daily pipeline
 
     * [ ] support minute-grain datasource
+      * [ ] baostock
+      * [ ] stock set
+    * [ ] get volume
 
   * factor
 
-    - [ ] daily factor pipeline
+    - [x] daily pipeline
+    - [ ] IC-met
 
   * backtest
 
@@ -20,7 +26,7 @@
 
   * [ ] signal
 
-    * [ ] notify
+    * [ ] notification: pick stock
 
 * strategy
   - [ ] Cross-sectional
@@ -31,3 +37,15 @@
     - [ ] 散户情绪
     - [ ] 主力行为（）
   - [ ] 小盘股
+
+
+
+# factor IC
+
+* what is a valid factor?
+  * cross-sectional comparability
+  * Unit
+  * stationary
+* how IC calculated on time series?
+  * why only use today's factor and next day return?
+
