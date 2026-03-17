@@ -67,7 +67,7 @@ docker compose ps
 浏览器打开：http://localhost:8888
 Token 见 `.env` 中的 `JUPYTER_TOKEN`
 
-打开 `notebooks/01_quick_start.ipynb` 开始体验。
+打开 `notebooks/quick_start/01_quick_start.ipynb` 开始体验。
 
 ### 5. 访问 Grafana
 
@@ -114,17 +114,35 @@ docker compose down -v
 │
 ├── app/
 │   ├── data_pipeline/
-│   │   └── fetch_daily.py      # Tushare 数据拉取示例
+│   │   └── fetch_daily.py      # Tushare 日线数据拉取 → market.daily
+│   ├── factors/
+│   │   ├── base.py             # BaseFactor 抽象基类
+│   │   ├── technical.py        # MA/RSI/MACD 等技术因子 (ta 库)
+│   │   └── pipeline.py         # 批量计算因子 → factors.daily_factors
+│   ├── strategy/
+│   │   ├── base.py             # BaseStrategy 抽象基类
+│   │   └── momentum.py         # 动量策略示例 (MA金叉 + RSI)
+│   ├── backtest/
+│   │   ├── runner.py           # Qlib 回测入口
+│   │   └── metrics.py          # Sharpe / 最大回撤 / Calmar 等指标
 │   └── utils/
-│       └── db.py               # 数据库连接工具
+│       ├── db.py               # 数据库连接工具 (SQLAlchemy 单例)
+│       ├── signals.py          # 信号写入 → signals.trading_signals
+│       └── qlib_helper.py      # Qlib 初始化工具
 │
 ├── notebooks/
-│   └── 01_quick_start.ipynb   # 快速入门
+│   └── quick_start/
+│       ├── 01_quick_start.ipynb    # 快速入门：数据拉取与写库
+│       ├── 02_factor_research.ipynb # 因子计算与 IC 分析
+│       └── 03_backtest.ipynb       # 策略信号生成与回测绩效
 │
 ├── scripts/
-│   └── init_qlib_data.sh      # Qlib 数据初始化
+│   ├── init_qlib_data.sh       # Qlib 数据初始化 (一次性)
+│   └── run_factor_pipeline.sh  # 批量运行因子流水线
 │
-└── config/                     # 策略配置文件
+└── config/
+    └── strategies/
+        └── momentum.yaml       # 动量策略超参数配置
 ```
 
 ## 数据库 Schema

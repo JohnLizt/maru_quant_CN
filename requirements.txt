@@ -13,6 +13,7 @@ pandas>=2.1.0          # Qlib 内部仍依赖 pandas
 # ── 数据库 ───────────────────────────────────────────────────
 psycopg2-binary>=2.9.9     # PostgreSQL 驱动
 sqlalchemy>=2.0.0           # ORM / 连接池
+connectorx>=0.4.2           # Polars read_database_uri 后端
 alembic>=1.13.0             # 数据库迁移
 
 # ── 缓存 / 任务队列 ──────────────────────────────────────────

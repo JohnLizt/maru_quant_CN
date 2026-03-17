@@ -1,0 +1,28 @@
+# 动量策略配置
+# 对应 app/strategy/momentum.py MomentumStrategy
+
+strategy:
+  name: momentum_v1
+  class: app.strategy.momentum.MomentumStrategy
+  params:
+    rsi_overbought: 70.0
+    rsi_oversold: 30.0
+
+factors:
+  - ma20
+  - ma60
+  - rsi14
+  - macd
+
+universe:
+  # 留空表示使用全部有数据的股票
+  # 或指定股票池，如：
+  # - "000001.SZ"
+  # - "600000.SH"
+
+backtest:
+  start_date: "2020-01-01"
+  end_date: "2023-12-31"
+  benchmark: "SH000300"   # 沪深300
+  initial_cash: 1_000_000
+  rebalance_freq: weekly   # daily | weekly | monthly

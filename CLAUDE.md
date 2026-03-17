@@ -82,8 +82,11 @@ Compression policies auto-compress data older than 30–90 days. All hypertables
 
 ### Application Layer (`app/`)
 - **`app/utils/db.py`** — SQLAlchemy engine singleton with connection pooling; use `get_session()` context manager for all DB operations
+- **`app/utils/signals.py`** — `upsert_signals()`: write strategy signals to `signals.trading_signals`
 - **`app/data_pipeline/fetch_daily.py`** — Reference implementation: Tushare Pro fetch → Polars → UPSERT into TimescaleDB
-- **`app/strategy/`** — Empty placeholder for Qlib-based strategies
+- **`app/factors/pipeline.py`** — Batch factor computation (MA/RSI/MACD) → `factors.daily_factors`
+- **`app/strategy/momentum.py`** — Momentum strategy: MA golden/death cross + RSI; outputs `(time, symbol, signal, score)`
+- **`app/backtest/metrics.py`** — Annualized return, vol, Sharpe, max drawdown, Calmar
 
 ### Key Libraries
 - **Tushare** (`tushare>=1.4.0`) — Chinese market data source; requires `TUSHARE_TOKEN` env var; stock codes in `000001.SZ` format
