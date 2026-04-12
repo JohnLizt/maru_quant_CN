@@ -81,7 +81,7 @@ Token 见 `.env` 中的 `JUPYTER_TOKEN`
 docker compose exec app bash
 
 # 初始化 Qlib 数据
-docker compose exec app bash scripts/init_qlib_data.sh
+docker compose exec app python scripts/init_qlib_data.py
 
 # 连接数据库
 docker compose exec timescaledb psql -U quant -d quant_db
@@ -100,11 +100,11 @@ docker compose down -v
 ## 每日 ETL
 
 ```bash
-# 每日增量更新（默认检查最近 7 个自然日，自动补全孔洞）
-docker compose exec app bash scripts/etl_daily.sh
+# 每日增量更新（默认检查最近 7 个自然日，自动补全 `config/stock_pool.csv` 的孔洞）
+docker compose exec app python scripts/etl_daily.py
 
 # 每周对账：检查最近 30 天
-docker compose exec app bash scripts/etl_daily.sh --lookback-days 30
+docker compose exec app python scripts/etl_daily.py --lookback-days 30
 
 # 查看同步状态
 docker compose exec timescaledb psql -U quant -d quant_db \
@@ -115,18 +115,20 @@ docker compose exec timescaledb psql -U quant -d quant_db \
 
 ```cron
 # 每个交易日增量更新
-30 9 * * 1-5  docker compose -f /path/to/docker-compose.yml exec -T app bash scripts/etl_daily.sh
+30 9 * * 1-5  docker compose -f /path/to/docker-compose.yml exec -T app python scripts/etl_daily.py
 
 # 每周日对账（30 天回溯）
-0 20 * * 0    docker compose -f /path/to/docker-compose.yml exec -T app bash scripts/etl_daily.sh --lookback-days 30
+0 20 * * 0    docker compose -f /path/to/docker-compose.yml exec -T app python scripts/etl_daily.py --lookback-days 30
 ```
 
 ### ETL 孔洞检测逻辑
 
-每次运行自动对比 `market.daily` 中已有日期与交易日历，仅拉取缺失日期：
+每次运行自动对比 `market.daily` 中股票池已有日期与交易日历，仅拉取缺失日期：
 - 正常运行：补齐当日数据
 - API 超时/限频导致漏拉：下次运行自动回填
 - 运行结果写入 `meta.sync_status`（`status='ok'` 或 `'error'`）
+
+股票池配置在 `config/stock_pool.csv`，格式为 `symbol,name`。
 
 ### 日志
 
@@ -186,10 +188,9 @@ tail -f logs/$(ls -t logs/ | head -1)
 ├── logs/                       # ETL 运行日志（挂载至容器 /app/logs）
 │
 ├── scripts/
-│   ├── etl_daily.sh            # 每日增量 ETL (孔洞检测 + 自动补全)
 │   ├── etl_daily.py            # ETL 主逻辑 (Python)
-│   ├── init_qlib_data.sh       # Qlib 数据初始化 (一次性)
-│   └── run_factor_pipeline.sh  # 批量运行因子流水线
+│   ├── factor_daily.py         # 批量运行因子流水线
+│   └── init_qlib_data.py       # Qlib 数据初始化 (一次性)
 │
 └── config/
     └── strategies/

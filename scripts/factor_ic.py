@@ -219,7 +219,7 @@ def main(start: str, end: str, lags: list[int],
 
     df_factors = load_factors(engine, start, end, factor_names)
     if df_factors.is_empty():
-        logger.error("factors.daily_factors 无数据，请先运行 factor_daily.sh")
+        logger.error("factors.daily_factors 无数据，请先运行 python scripts/factor_daily.py")
         sys.exit(1)
 
     available = df_factors["factor_name"].unique().sort().to_list()

@@ -24,7 +24,7 @@ docker compose exec timescaledb psql -U quant -d quant_db -c "\dn"
 # Expected schemas: market, factors, signals, meta
 
 # 5. Initialize Qlib data (one-time)
-docker compose exec app bash scripts/init_qlib_data.sh
+docker compose exec app python scripts/init_qlib_data.py
 ```
 
 > **Note:** `docker/timescaledb/init.sql` runs automatically only on the **first** `docker compose up` (when the volume is empty). To re-run it, wipe the volume first: `docker compose down -v && docker compose up -d`
@@ -54,7 +54,7 @@ docker compose exec app bash
 docker compose exec timescaledb psql -U quant -d quant_db
 
 # Initialize Qlib data (one-time setup)
-docker compose exec app bash scripts/init_qlib_data.sh
+docker compose exec app python scripts/init_qlib_data.py
 
 # View logs
 docker compose logs -f [service]   # services: app, timescaledb, redis, jupyter, grafana
