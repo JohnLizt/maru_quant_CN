@@ -5,12 +5,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Literal
 
 import polars as pl
 
-
-SuspendedPolicy = Literal["allow", "mask"]
+from app.factors.specs import FactorSpec, SuspendedPolicy
 
 
 class BaseFactor(ABC):
@@ -21,8 +19,23 @@ class BaseFactor(ABC):
     返回新增因子列的 DataFrame。
     """
 
-    name: str  # 因子名称，用作 factors.daily_factors.factor_name
-    suspended_policy: SuspendedPolicy = "allow"
+    spec: FactorSpec
+
+    @property
+    def name(self) -> str:
+        return self.spec.name
+
+    @property
+    def suspended_policy(self) -> SuspendedPolicy:
+        return self.spec.suspended_policy
+
+    @property
+    def warmup_days(self) -> int:
+        return self.spec.warmup_days
+
+    @property
+    def required_fields(self) -> tuple[str, ...]:
+        return self.spec.required_fields
 
     @abstractmethod
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:

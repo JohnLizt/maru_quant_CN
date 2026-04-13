@@ -14,6 +14,7 @@ import polars as pl
 import ta
 
 from app.factors.base import BaseFactor
+from app.factors.specs import FactorSpec
 
 
 def _clean(result: pl.DataFrame) -> pl.DataFrame:
@@ -24,7 +25,14 @@ def _clean(result: pl.DataFrame) -> pl.DataFrame:
 class PriceToMA20Factor(BaseFactor):
     """价格偏离 20 日均线比率：(close - MA20) / MA20"""
 
-    name = "price_to_ma20"
+    spec = FactorSpec(
+        name="price_to_ma20",
+        category="time_series",
+        warmup_days=30,
+        suspended_policy="allow",
+        required_fields=("close",),
+        description="(close - MA20) / MA20",
+    )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         close = df["close"].to_pandas()
@@ -43,7 +51,14 @@ class PriceToMA20Factor(BaseFactor):
 class MACrossGactor(BaseFactor):
     """均线斜率：(MA20 - MA60) / MA60，正值为多头排列（金叉），负值为空头排列（死叉）"""
 
-    name = "ma_cross"
+    spec = FactorSpec(
+        name="ma_cross",
+        category="time_series",
+        warmup_days=70,
+        suspended_policy="allow",
+        required_fields=("close",),
+        description="(MA20 - MA60) / MA60",
+    )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         close = df["close"].to_pandas()
@@ -64,7 +79,14 @@ class MACrossGactor(BaseFactor):
 class RSIFactor(BaseFactor):
     """14 日 RSI（0~100），已归一化，跨股票可比"""
 
-    name = "rsi14"
+    spec = FactorSpec(
+        name="rsi14",
+        category="time_series",
+        warmup_days=20,
+        suspended_policy="allow",
+        required_fields=("close",),
+        description="RSI(14)",
+    )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         close = df["close"].to_pandas()
@@ -78,7 +100,14 @@ class RSIFactor(BaseFactor):
 class MACDNormFactor(BaseFactor):
     """MACD 差离值 / 收盘价，消除价格量纲后跨股票可比"""
 
-    name = "macd_norm"
+    spec = FactorSpec(
+        name="macd_norm",
+        category="time_series",
+        warmup_days=50,
+        suspended_policy="allow",
+        required_fields=("close",),
+        description="MACD diff / close",
+    )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         close = df["close"].to_pandas()

@@ -7,6 +7,7 @@ from __future__ import annotations
 import polars as pl
 
 from app.factors.base import BaseFactor
+from app.factors.specs import FactorSpec
 
 
 class LimitUpFactor(BaseFactor):
@@ -21,8 +22,14 @@ class LimitUpFactor(BaseFactor):
     - 新股上市首日 prev_close 为 null，对应行输出 NaN 并在写入时被过滤
     """
 
-    name = "limit_up"
-    suspended_policy = "mask"
+    spec = FactorSpec(
+        name="limit_up",
+        category="time_series",
+        warmup_days=2,
+        suspended_policy="mask",
+        required_fields=("high", "close"),
+        description="high >= prev_close * 1.1",
+    )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         result = (
