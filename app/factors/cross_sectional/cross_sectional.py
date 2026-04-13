@@ -22,6 +22,7 @@ class LimitUpFactor(BaseFactor):
     """
 
     name = "limit_up"
+    suspended_policy = "mask"
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         result = (

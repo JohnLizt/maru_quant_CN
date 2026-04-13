@@ -36,10 +36,8 @@ class PriceToMA20Factor(BaseFactor):
             .with_columns(
                 ((pl.col("close") - pl.col("_ma20")) / pl.col("_ma20")).alias("factor_value")
             )
-            .select(["time", "symbol", "factor_value"])
-            .with_columns(pl.lit(self.name).alias("factor_name"))
         )
-        return _clean(result)
+        return _clean(self._to_long(result, "factor_value"))
 
 
 class MACrossGactor(BaseFactor):
@@ -59,10 +57,8 @@ class MACrossGactor(BaseFactor):
             .with_columns(
                 ((pl.col("_ma20") - pl.col("_ma60")) / pl.col("_ma60")).alias("factor_value")
             )
-            .select(["time", "symbol", "factor_value"])
-            .with_columns(pl.lit(self.name).alias("factor_name"))
         )
-        return _clean(result)
+        return _clean(self._to_long(result, "factor_value"))
 
 
 class RSIFactor(BaseFactor):
@@ -75,10 +71,8 @@ class RSIFactor(BaseFactor):
         values = ta.momentum.rsi(close, window=14)
         result = (
             df.with_columns(pl.Series("factor_value", values.values))
-            .select(["time", "symbol", "factor_value"])
-            .with_columns(pl.lit(self.name).alias("factor_name"))
         )
-        return _clean(result)
+        return _clean(self._to_long(result, "factor_value"))
 
 
 class MACDNormFactor(BaseFactor):
@@ -94,7 +88,5 @@ class MACDNormFactor(BaseFactor):
             .with_columns(
                 (pl.col("_macd_diff") / pl.col("close")).alias("factor_value")
             )
-            .select(["time", "symbol", "factor_value"])
-            .with_columns(pl.lit(self.name).alias("factor_name"))
         )
-        return _clean(result)
+        return _clean(self._to_long(result, "factor_value"))

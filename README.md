@@ -130,6 +130,8 @@ docker compose exec timescaledb psql -U quant -d quant_db \
 
 股票池配置在 `config/stock_pool.csv`，格式为 `symbol,name`。
 
+若股票池成分股当日停牌，ETL 会自动补一行停牌记录：价格沿用前收、`volume/amount=0`、`pct_change=0`、`is_suspended=true`，这样后续因子/回测仍可使用连续面板，但交易层必须识别停牌标记。
+
 ### 日志
 
 ETL 日志写入 `logs/` 目录（挂载至容器内 `/app/logs`），按时间戳命名：

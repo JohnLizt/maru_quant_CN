@@ -93,10 +93,10 @@ def get_factor_dates(engine, start: str, end: str) -> set[str]:
 
 
 def load_ohlcv(engine, symbol: str, start: str, end: str) -> pl.DataFrame:
-    """加载单只股票的行情数据（含 warm-up 历史）"""
+    """加载单只股票的行情数据（含 warm-up 历史和停牌标记）"""
     with engine.connect() as conn:
         rows = conn.execute(text("""
-            SELECT time, symbol, open, high, low, close, volume
+            SELECT time, symbol, open, high, low, close, volume, is_suspended
             FROM market.daily
             WHERE symbol = :symbol
               AND time BETWEEN :start AND :end
@@ -111,8 +111,9 @@ def load_ohlcv(engine, symbol: str, start: str, end: str) -> pl.DataFrame:
             "low": pl.Float64,
             "close": pl.Float64,
             "volume": pl.Int64,
+            "is_suspended": pl.Boolean,
         })
-    return pl.DataFrame(rows, schema=["time", "symbol", "open", "high", "low", "close", "volume"],
+    return pl.DataFrame(rows, schema=["time", "symbol", "open", "high", "low", "close", "volume", "is_suspended"],
                         orient="row")
 
 

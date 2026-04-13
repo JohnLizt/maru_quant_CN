@@ -16,7 +16,9 @@
 
 ## Source-of-truth entrypoints
 - Market ETL entrypoint is `scripts/etl_daily.py`; it derives trading dates from Tushare daily data for `000001.SZ`, filters fetched rows to `config/stock_pool.csv`, treats a date as complete only when every pool symbol is present in `market.daily`, then updates `meta.sync_status`.
+- Market ETL auto-fills suspended pool symbols using prior close (`open/high/low/close=prev_close`, `volume/amount=0`, `pct_change=0`, `is_suspended=true`). Missing rows are only considered errors if Tushare also does not mark the symbol as suspended for that date.
 - Factor entrypoint is `scripts/factor_daily.py`; it reads from `market.daily`, computes factors per symbol with a 90-day warmup window, writes long-format rows into `factors.daily_factors`, then updates `meta.sync_status`.
+- `factor_daily.py` now loads `is_suspended` from `market.daily`. `BaseFactor` centralizes suspended-row handling via `suspended_policy`: technical factors currently `allow`, while `LimitUpFactor` uses `mask` so停牌日不会产出该事件因子。
 - Signal persistence lives in `app/utils/signals.py` via `upsert_signals()`.
 - DB access should go through `app/utils/db.py`; avoid relying on its localhost fallback because it points to `akshare_db`, not this repo's `quant_db`.
 

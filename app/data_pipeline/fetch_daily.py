@@ -56,13 +56,16 @@ def upsert_daily(df: pl.DataFrame) -> int:
         return 0
 
     engine = get_engine()
+    if "is_suspended" not in df.columns:
+        df = df.with_columns(pl.lit(False).alias("is_suspended"))
+
     rows = df.to_dicts()
 
     sql = text("""
         INSERT INTO market.daily
-            (time, symbol, open, high, low, close, volume, amount, pct_change)
+            (time, symbol, open, high, low, close, volume, amount, pct_change, is_suspended)
         VALUES
-            (:time, :symbol, :open, :high, :low, :close, :volume, :amount, :pct_change)
+            (:time, :symbol, :open, :high, :low, :close, :volume, :amount, :pct_change, :is_suspended)
         ON CONFLICT (time, symbol) DO UPDATE SET
             open       = EXCLUDED.open,
             high       = EXCLUDED.high,
@@ -70,7 +73,8 @@ def upsert_daily(df: pl.DataFrame) -> int:
             close      = EXCLUDED.close,
             volume     = EXCLUDED.volume,
             amount     = EXCLUDED.amount,
-            pct_change = EXCLUDED.pct_change
+            pct_change = EXCLUDED.pct_change,
+            is_suspended = EXCLUDED.is_suspended
     """)
 
     with engine.begin() as conn:

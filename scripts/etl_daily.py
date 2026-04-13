@@ -36,6 +36,7 @@ DATA_TYPE      = "daily_market"
 CAL_SYMBOL     = "000001.SZ"   # 用于推导交易日历的参考股票
 FETCH_FIELDS   = "ts_code,trade_date,open,high,low,close,pct_chg,vol,amount"
 STOCK_POOL_CSV = Path("/app/config/stock_pool.csv")
+SUSPEND_TYPES  = {"S"}
 
 
 # ── 工具函数 ──────────────────────────────────────────────────
@@ -123,19 +124,44 @@ def get_incomplete_dates(engine, start: str, end: str, symbols: list[str]) -> li
     return [(r[0], r[1]) for r in rows]
 
 
-def fetch_one_date(pro, date: str, symbols: list[str]) -> int:
-    """拉取单个交易日股票池行情并写入 market.daily，返回写入行数"""
-    df_pd = pro.daily(trade_date=date, fields=FETCH_FIELDS)
-    if df_pd is None or df_pd.empty:
-        logger.warning(f"{date}: Tushare 返回空数据，跳过")
-        return 0
+def get_previous_closes(engine, date: str, symbols: list[str]) -> dict[str, float]:
+    """查询指定日期前最近一个交易日的收盘价。"""
+    if not symbols:
+        return {}
 
-    df_pd = df_pd[df_pd["ts_code"].isin(symbols)]
-    if df_pd.empty:
-        logger.warning(f"{date}: 股票池无数据，跳过")
-        return 0
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT DISTINCT ON (symbol)
+                symbol,
+                close::double precision AS close
+            FROM market.daily
+            WHERE symbol = ANY(:symbols)
+              AND time < :date
+            ORDER BY symbol, time DESC
+        """), {
+            "symbols": symbols,
+            "date": _iso(date),
+        }).fetchall()
+    return {r[0]: float(r[1]) for r in rows if r[1] is not None}
 
-    df = (
+
+def get_suspended_symbols(pro, date: str, symbols: list[str]) -> set[str]:
+    """查询股票池内当日停牌股票。"""
+    df = pro.suspend_d(ts_code="", trade_date=date)
+    time.sleep(RATE_LIMIT)
+    if df is None or df.empty:
+        return set()
+
+    df = df[
+        df["ts_code"].isin(symbols)
+        & df["suspend_type"].isin(SUSPEND_TYPES)
+    ]
+    return set(df["ts_code"].tolist())
+
+
+def build_daily_frame(df_pd) -> pl.DataFrame:
+    """将 Tushare 日线 pandas DataFrame 转为标准 Polars 格式。"""
+    return (
         pl.from_pandas(df_pd)
         .rename({"ts_code": "symbol", "trade_date": "time",
                  "pct_chg": "pct_change", "vol": "volume"})
@@ -150,10 +176,101 @@ def fetch_one_date(pro, date: str, symbols: list[str]) -> int:
             pl.col("pct_change").cast(pl.Float64),
             pl.col("volume").cast(pl.Int64),
             pl.col("amount").cast(pl.Float64),
+            pl.lit(False).alias("is_suspended"),
         ])
         .select(["time", "symbol", "open", "high", "low", "close",
-                 "volume", "amount", "pct_change"])
+                 "volume", "amount", "pct_change", "is_suspended"])
     )
+
+
+def build_suspended_rows(engine, date: str, suspended_symbols: list[str]) -> pl.DataFrame:
+    """为停牌股票生成填充行：价格沿用前收，成交量/额为 0。"""
+    prev_close_map = get_previous_closes(engine, date, suspended_symbols)
+    missing_prev_close = [symbol for symbol in suspended_symbols if symbol not in prev_close_map]
+    if missing_prev_close:
+        raise ValueError(
+            f"停牌股票缺少前收盘价，无法填充: {missing_prev_close[:5]}"
+        )
+
+    trade_time = datetime.strptime(date, "%Y%m%d").replace(tzinfo=timezone.utc)
+    rows = [
+        {
+            "time": trade_time,
+            "symbol": symbol,
+            "open": prev_close,
+            "high": prev_close,
+            "low": prev_close,
+            "close": prev_close,
+            "volume": 0,
+            "amount": 0.0,
+            "pct_change": 0.0,
+            "is_suspended": True,
+        }
+        for symbol, prev_close in sorted(prev_close_map.items())
+    ]
+    return pl.DataFrame(rows, schema={
+        "time": pl.Datetime("us", "UTC"),
+        "symbol": pl.Utf8,
+        "open": pl.Float64,
+        "high": pl.Float64,
+        "low": pl.Float64,
+        "close": pl.Float64,
+        "volume": pl.Int64,
+        "amount": pl.Float64,
+        "pct_change": pl.Float64,
+        "is_suspended": pl.Boolean,
+    })
+
+
+def fetch_one_date(pro, date: str, symbols: list[str]) -> int:
+    """拉取单个交易日股票池行情；停牌股票用前收补齐并打标。"""
+    df_pd = pro.daily(trade_date=date, fields=FETCH_FIELDS)
+    if df_pd is None or df_pd.empty:
+        logger.warning(f"{date}: Tushare 返回空数据，跳过")
+        df_pd = None
+
+    if df_pd is None:
+        actual_symbols: set[str] = set()
+    else:
+        df_pd = df_pd[df_pd["ts_code"].isin(symbols)]
+        actual_symbols = set(df_pd["ts_code"].tolist())
+
+    missing_symbols = sorted(set(symbols) - actual_symbols)
+    if missing_symbols:
+        suspended_symbols = get_suspended_symbols(pro, date, symbols)
+        unresolved = sorted(set(missing_symbols) - suspended_symbols)
+        if unresolved:
+            raise ValueError(
+                f"非停牌股票缺少日线数据: {unresolved[:5]}"
+                + (" ..." if len(unresolved) > 5 else "")
+            )
+        suspended_df = build_suspended_rows(get_engine(), date, sorted(suspended_symbols))
+        logger.info(f"{date}: 检测到停牌股票 {len(suspended_symbols)} 只，已按前收补齐")
+    else:
+        suspended_df = pl.DataFrame(schema={
+            "time": pl.Datetime("us", "UTC"),
+            "symbol": pl.Utf8,
+            "open": pl.Float64,
+            "high": pl.Float64,
+            "low": pl.Float64,
+            "close": pl.Float64,
+            "volume": pl.Int64,
+            "amount": pl.Float64,
+            "pct_change": pl.Float64,
+            "is_suspended": pl.Boolean,
+        })
+
+    frames: list[pl.DataFrame] = []
+    if df_pd is not None and not df_pd.empty:
+        frames.append(build_daily_frame(df_pd))
+    if not suspended_df.is_empty():
+        frames.append(suspended_df)
+
+    if not frames:
+        logger.warning(f"{date}: 股票池无数据，跳过")
+        return 0
+
+    df = pl.concat(frames, how="vertical")
     return upsert_daily(df)
 
 
