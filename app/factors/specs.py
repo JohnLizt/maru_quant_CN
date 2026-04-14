@@ -20,4 +20,5 @@ class FactorSpec:
     warmup_days: int
     suspended_policy: SuspendedPolicy = "allow"
     required_fields: tuple[str, ...] = ("open", "high", "low", "close", "volume")
+    ic_min_cross_section: int | None = 20
     description: str = ""

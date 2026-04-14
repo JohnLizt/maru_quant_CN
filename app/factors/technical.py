@@ -31,6 +31,7 @@ class PriceToMA20Factor(BaseFactor):
         warmup_days=30,
         suspended_policy="allow",
         required_fields=("close",),
+        ic_min_cross_section=20,
         description="(close - MA20) / MA20",
     )
 
@@ -54,9 +55,10 @@ class MACrossGactor(BaseFactor):
     spec = FactorSpec(
         name="ma_cross",
         category="time_series",
-        warmup_days=70,
+        warmup_days=100,
         suspended_policy="allow",
         required_fields=("close",),
+        ic_min_cross_section=20,
         description="(MA20 - MA60) / MA60",
     )
 
@@ -85,6 +87,7 @@ class RSIFactor(BaseFactor):
         warmup_days=20,
         suspended_policy="allow",
         required_fields=("close",),
+        ic_min_cross_section=20,
         description="RSI(14)",
     )
 
@@ -106,6 +109,7 @@ class MACDNormFactor(BaseFactor):
         warmup_days=50,
         suspended_policy="allow",
         required_fields=("close",),
+        ic_min_cross_section=20,
         description="MACD diff / close",
     )
 

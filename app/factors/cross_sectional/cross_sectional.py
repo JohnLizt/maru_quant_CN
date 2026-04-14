@@ -28,6 +28,7 @@ class LimitUpFactor(BaseFactor):
         warmup_days=2,
         suspended_policy="mask",
         required_fields=("high", "close"),
+        ic_min_cross_section=None,
         description="high >= prev_close * 1.1",
     )
 

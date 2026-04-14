@@ -41,3 +41,9 @@ def required_market_fields(factors: list[BaseFactor]) -> set[str]:
     for factor in factors:
         fields.update(factor.required_fields)
     return fields
+
+
+def ic_min_cross_sections(factors: list[BaseFactor] | None = None) -> dict[str, int | None]:
+    """返回因子名到 IC 最小截面样本阈值的映射。"""
+    selected = factors if factors is not None else DEFAULT_FACTORS
+    return {factor.name: factor.ic_min_cross_section for factor in selected}

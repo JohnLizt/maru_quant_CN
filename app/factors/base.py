@@ -37,6 +37,10 @@ class BaseFactor(ABC):
     def required_fields(self) -> tuple[str, ...]:
         return self.spec.required_fields
 
+    @property
+    def ic_min_cross_section(self) -> int | None:
+        return self.spec.ic_min_cross_section
+
     @abstractmethod
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         """
