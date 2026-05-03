@@ -17,7 +17,7 @@
   n_days       有效交易日数
 
 用法：
-  python scripts/factor_ic.py                                   # 近 1 年，lag=1，全部因子
+  python scripts/factor_ic.py                                   # 近 1 年，lags=1,2,5,10,20，全部因子
   python scripts/factor_ic.py --start 2023-01-01 --end 2024-12-31
   python scripts/factor_ic.py --factors ma_cross,rsi14
   python scripts/factor_ic.py --lags 1,2,5,10,20               # IC 衰减分析
@@ -189,6 +189,21 @@ def summarize_ic(daily_ic: pl.DataFrame, lag: int) -> pl.DataFrame:
 # ── 打印 ──────────────────────────────────────────────────────
 
 def print_full_table(summary: pl.DataFrame, lag: int) -> None:
+    def _fmt_float(value: float | None, width: int, precision: int = 4) -> str:
+        if value is None:
+            return f"{'—':>{width}}"
+        return f"{value:>{width}.{precision}f}"
+
+    def _fmt_pct(value: float | None, width: int) -> str:
+        if value is None:
+            return f"{'—':>{width}}"
+        return f"{value:>{width}.1%}"
+
+    def _fmt_int(value: int | None, width: int) -> str:
+        if value is None:
+            return f"{'—':>{width}}"
+        return f"{int(value):>{width}d}"
+
     print(f"\n── lag={lag}d {'─' * 60}")
     header = (
         f"  {'factor':<16} {'mean_RankIC':>12} {'RankIC_std':>11} {'RankIC_IR':>10} "
@@ -200,15 +215,15 @@ def print_full_table(summary: pl.DataFrame, lag: int) -> None:
     for row in summary.iter_rows(named=True):
         print(
             f"  {row['factor_name']:<16} "
-            f"{row['mean_rank_ic']:>12.4f} "
-            f"{row['rank_ic_std']:>11.4f} "
-            f"{row['rank_ic_ir']:>10.3f} "
-            f"{row['mean_ic']:>8.4f} "
-            f"{row['ic_std']:>8.4f} "
-            f"{row['ic_ir']:>7.3f} "
-            f"{row['t_stat']:>7.2f} "
-            f"{row['win_rate']:>8.1%} "
-            f"{int(row['n_days']):>7d}"
+            f"{_fmt_float(row['mean_rank_ic'], 12)} "
+            f"{_fmt_float(row['rank_ic_std'], 11)} "
+            f"{_fmt_float(row['rank_ic_ir'], 10, 3)} "
+            f"{_fmt_float(row['mean_ic'], 8)} "
+            f"{_fmt_float(row['ic_std'], 8)} "
+            f"{_fmt_float(row['ic_ir'], 7, 3)} "
+            f"{_fmt_float(row['t_stat'], 7, 2)} "
+            f"{_fmt_pct(row['win_rate'], 8)} "
+            f"{_fmt_int(row['n_days'], 7)}"
         )
 
 
@@ -229,8 +244,8 @@ def print_decay_grid(all_summaries: list[pl.DataFrame], lags: list[int]) -> None
             match = combined.filter(
                 (pl.col("factor_name") == factor) & (pl.col("lag") == lag)
             )
-            val = match["ic_ir"][0] if len(match) > 0 else float("nan")
-            row_str += f"{val:>{col_w}.3f}" if val == val else f"{'—':>{col_w}}"
+            val = match["ic_ir"][0] if len(match) > 0 else None
+            row_str += f"{val:>{col_w}.3f}" if val is not None else f"{'—':>{col_w}}"
         print(row_str)
     print()
 
@@ -297,8 +312,8 @@ if __name__ == "__main__":
                         help=f"开始日期 YYYY-MM-DD（默认 {_default_start}）")
     parser.add_argument("--end",   default=_default_end,
                         help=f"结束日期 YYYY-MM-DD（默认 {_default_end}）")
-    parser.add_argument("--lags",  default="1",
-                        help="逗号分隔的 forward lag（默认 1）。例：--lags 1,2,5,10,20")
+    parser.add_argument("--lags",  default="1,2,5,10,20",
+                        help="逗号分隔的 forward lag（默认 1,2,5,10,20）。例：--lags 1,2,5,10,20")
     parser.add_argument("--factors", default=None,
                         help="逗号分隔的因子名称，默认全部")
     parser.add_argument("--output", default=None,

@@ -56,6 +56,9 @@ docker compose exec timescaledb psql -U quant -d quant_db
 # Initialize Qlib data (one-time setup)
 docker compose exec app python scripts/init_qlib_data.py
 
+# Query factor API
+docker compose exec app python scripts/api/query_factors.py --symbol 603019.SH --date 2026-04-30
+
 # View logs
 docker compose logs -f [service]   # services: app, timescaledb, redis, jupyter, grafana
 ```

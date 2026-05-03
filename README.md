@@ -23,6 +23,7 @@
 │  │(策略框架) │   │ (研究)   │                    │
 │  └──────────┘   └──────────┘                    │
 └─────────────────────────────────────────────────┘
+本项目聚焦生产而非策略研究，重点在于打通数据ETL->因子->信号->消息推送流程，策略研究回测可以用其他研究库
 ```
 
 ## 服务端口
@@ -132,6 +133,18 @@ docker compose exec timescaledb psql -U quant -d quant_db \
 
 若股票池成分股当日停牌，ETL 会自动补一行停牌记录：价格沿用前收、`volume/amount=0`、`pct_change=0`、`is_suspended=true`，这样后续因子/回测仍可使用连续面板，但交易层必须识别停牌标记。
 
+## 查询 API（CLI 形式）
+
+`query_factors.py` 已从顶层 `scripts/` 移到 `scripts/api/`，作为面向外部调用方的查询入口；其他 `scripts/` 下脚本仍主要用于仓库内部 ETL、因子流水线和运维。
+
+```bash
+# 单股票单日
+docker compose exec app python scripts/api/query_factors.py --symbol 603019.SH --date 2026-04-30
+
+# 多股票查询（支持重复 --symbol，或单个字符串中带空格/逗号）
+docker compose exec app python scripts/api/query_factors.py --symbol "603019.SH 300059.SZ" --date 2026-04-30 --format json
+```
+
 ### 日志
 
 ETL 日志写入 `logs/` 目录（挂载至容器内 `/app/logs`），按时间戳命名：
@@ -190,6 +203,8 @@ tail -f logs/$(ls -t logs/ | head -1)
 ├── logs/                       # ETL 运行日志（挂载至容器 /app/logs）
 │
 ├── scripts/
+│   ├── api/
+│   │   └── query_factors.py    # 面向调用方的查询 CLI / API entrypoint
 │   ├── etl_daily.py            # ETL 主逻辑 (Python)
 │   ├── factor_daily.py         # 批量运行因子流水线
 │   └── init_qlib_data.py       # Qlib 数据初始化 (一次性)
