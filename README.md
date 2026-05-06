@@ -1,234 +1,314 @@
-# A股量化系统
+# CN Equity Quant Pipeline
 
-> Tushare + TimescaleDB + Polars + Qlib
+> A Dockerized A-share data pipeline built around **Tushare + TimescaleDB + Polars + Qlib**.
 
-## 架构概览
+This project focuses on the boring-but-critical part of quant infra: getting daily Chinese equity data into a usable pipeline, keeping it complete, computing factors consistently, and exposing results through a simple query interface.
 
+## Why this project matters
+
+Most quant demos stop at notebooks. This repo is more practical:
+
+- **Incremental ETL for A-shares** instead of one-shot scripts
+- **Gap detection and backfill** for missing market / factor dates
+- **Suspension-aware handling** so downstream factor data stays usable
+- **TimescaleDB-backed storage** for structured historical data
+- **Factor pipeline + query entrypoint** for downstream research or services
+- **Dockerized local stack** for reproducible setup
+
+If you want a base layer for an A-share factor platform, this is the point of the build.
+
+## Current scope
+
+This repository is currently strongest at:
+
+- daily market ETL
+- daily factor generation
+- factor querying
+- notebook-based exploration
+
+It is **not yet a polished end-to-end trading platform**. In particular, the strategy/backtest layer still needs naming and integration cleanup before it can be treated as production-ready.
+
+## Architecture
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                        Docker Network                       │
+│                                                             │
+│   Tushare API  -->  ETL / Factor App  -->  TimescaleDB      │
+│                            │                 │               │
+│                            │                 ├─ market.*     │
+│                            │                 ├─ factors.*    │
+│                            │                 └─ meta.*       │
+│                            │                                 │
+│                            ├─ Qlib data volume              │
+│                            ├─ logs/                         │
+│                            └─ query CLI                     │
+│                                                             │
+│   JupyterLab  <------------------------------------------>  │
+│   Grafana     <------------------------------------------>  │
+└─────────────────────────────────────────────────────────────┘
 ```
-┌─────────────────────────────────────────────────┐
-│                  Docker Network                  │
-│                                                  │
-│  ┌──────────┐   ┌──────────┐   ┌─────────────┐  │
-│  │Tushare   │──▶│TimescaleDB│◀──│  Grafana    │  │
-│  │(数据拉取) │   │(时序存储) │   │ (可视化)    │  │
-│  └──────────┘   └──────────┘   └─────────────┘  │
-│       │               ▲                          │
-│  ┌────▼─────┐   ┌─────┴────┐                    │
-│  │  Polars  │   │  Redis   │                    │
-│  │(数据处理) │   │ (缓存)   │                    │
-│  └──────────┘   └──────────┘                    │
-│       │                                          │
-│  ┌────▼─────┐   ┌──────────┐                    │
-│  │  Qlib    │   │JupyterLab│                    │
-│  │(策略框架) │   │ (研究)   │                    │
-│  └──────────┘   └──────────┘                    │
-└─────────────────────────────────────────────────┘
-本项目聚焦生产而非策略研究，重点在于打通数据ETL->因子->信号->消息推送流程，策略研究回测可以用其他研究库
+
+## Core workflow
+
+```text
+Tushare daily data
+    -> ETL completeness check
+    -> market.daily
+    -> factor computation with warmup window
+    -> factors.daily_factors
+    -> query API / notebooks / downstream signals
 ```
 
-## 服务端口
+## Key features
 
-| 服务         | 端口  | 说明               |
-|------------|-------|------------------|
-| TimescaleDB | 5432  | PostgreSQL 兼容     |
-| Redis       | 6379  | 缓存               |
-| JupyterLab  | 8888  | 研究环境             |
-| Grafana     | 3000  | 监控大盘             |
+### 1. Incremental market ETL
 
-## 快速开始
+The main ETL entrypoint is:
 
-### 1. 初始化配置
+```bash
+docker compose exec app python scripts/etl_daily.py
+```
+
+What it does:
+
+- derives trading dates from `000001.SZ`
+- checks which dates are incomplete in `market.daily`
+- fetches only missing data by default
+- updates `meta.sync_status`
+
+### 2. Suspension-aware data repair
+
+If a stock in the pool is suspended on a trading date, the ETL fills a synthetic row using the previous close:
+
+- `open/high/low/close = prev_close`
+- `volume = 0`
+- `amount = 0`
+- `pct_change = 0`
+- `is_suspended = true`
+
+This keeps downstream panel-style factor computation continuous while preserving suspension information.
+
+### 3. Daily factor pipeline
+
+The factor entrypoint is:
+
+```bash
+docker compose exec app python scripts/factor_daily.py
+```
+
+The pipeline:
+
+- reads from `market.daily`
+- detects missing factor dates
+- applies a warmup window per symbol
+- computes registered factors
+- writes long-format rows into `factors.daily_factors`
+- updates `meta.sync_status`
+
+### 4. Query-facing factor API entrypoint
+
+External callers should use:
+
+```bash
+docker compose exec app python scripts/api/query_factors.py --symbol 603019.SH --date 2026-04-30
+```
+
+This is a CLI-style query interface over the factor query service.
+
+## Tech stack
+
+- **Tushare**: China market data source
+- **TimescaleDB / PostgreSQL**: historical storage
+- **Polars**: fast dataframe processing
+- **Qlib**: research/backtest ecosystem integration
+- **JupyterLab**: interactive exploration
+- **Grafana**: lightweight monitoring and visualization
+- **Docker Compose**: reproducible local environment
+
+## Quick start
+
+### 1. Prepare environment
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填写 TUSHARE_TOKEN 及其他密码
 ```
 
-### 2. 构建并启动
+Then edit `.env` and set at least:
+
+- `TUSHARE_TOKEN`
+- database / Redis / Grafana credentials as needed
+
+### 2. Build and start
 
 ```bash
-# 首次构建（需要下载依赖，约 5~10 分钟）
 docker compose build
-
-# 启动所有服务
 docker compose up -d
-
-# 查看日志
-docker compose logs -f
 ```
 
-### 3. 验证服务状态
+### 3. Verify setup
+
+Check database schemas:
 
 ```bash
-docker compose ps
+docker compose exec timescaledb psql -U quant -d quant_db -c "\dn"
 ```
 
-### 4. 访问 JupyterLab
+Expected schemas include:
 
-浏览器打开：http://localhost:8888
-Token 见 `.env` 中的 `JUPYTER_TOKEN`
+- `market`
+- `factors`
+- `signals`
+- `meta`
 
-打开 `notebooks/quick_start/01_quick_start.ipynb` 开始体验。
-
-### 5. 访问 Grafana
-
-浏览器打开：http://localhost:3000
-账号密码见 `.env` 中的 `GRAFANA_USER` / `GRAFANA_PASSWORD`
-
-## 常用命令
+Check Qlib import:
 
 ```bash
-# 进入 app 容器
-docker compose exec app bash
+docker compose exec app python -c "import qlib; print(qlib.__version__)"
+```
 
-# 初始化 Qlib 数据
+### 4. Initialize Qlib data once
+
+```bash
 docker compose exec app python scripts/init_qlib_data.py
-
-# 连接数据库
-docker compose exec timescaledb psql -U quant -d quant_db
-
-# 查看超表信息
-docker compose exec timescaledb psql -U quant -d quant_db \
-  -c "SELECT * FROM timescaledb_information.hypertables;"
-
-# 停止服务（保留数据）
-docker compose down
-
-# 停止并清除所有数据（谨慎！）
-docker compose down -v
 ```
 
-## 每日 ETL
+### 5. Run daily ETL
 
 ```bash
-# 每日增量更新（默认检查最近 7 个自然日，自动补全 `config/stock_pool.csv` 的孔洞）
 docker compose exec app python scripts/etl_daily.py
-
-# 每周对账：检查最近 30 天
-docker compose exec app python scripts/etl_daily.py --lookback-days 30
-
-# 查看同步状态
-docker compose exec timescaledb psql -U quant -d quant_db \
-  -c "SELECT data_type, last_date, status, error_msg, updated_at FROM meta.sync_status;"
 ```
 
-### Cron 配置（宿主机，A 股收盘后 17:30 CST = 09:30 UTC）
-
-```cron
-# 每个交易日增量更新
-30 9 * * 1-5  docker compose -f /path/to/docker-compose.yml exec -T app python scripts/etl_daily.py
-
-# 每周日对账（30 天回溯）
-0 20 * * 0    docker compose -f /path/to/docker-compose.yml exec -T app python scripts/etl_daily.py --lookback-days 30
-```
-
-### ETL 孔洞检测逻辑
-
-每次运行自动对比 `market.daily` 中股票池已有日期与交易日历，仅拉取缺失日期：
-- 正常运行：补齐当日数据
-- API 超时/限频导致漏拉：下次运行自动回填
-- 运行结果写入 `meta.sync_status`（`status='ok'` 或 `'error'`）
-
-股票池配置在 `config/stock_pool.csv`，格式为 `symbol,name`。
-
-若股票池成分股当日停牌，ETL 会自动补一行停牌记录：价格沿用前收、`volume/amount=0`、`pct_change=0`、`is_suspended=true`，这样后续因子/回测仍可使用连续面板，但交易层必须识别停牌标记。
-
-## 查询 API（CLI 形式）
-
-`query_factors.py` 已从顶层 `scripts/` 移到 `scripts/api/`，作为面向外部调用方的查询入口；其他 `scripts/` 下脚本仍主要用于仓库内部 ETL、因子流水线和运维。
+### 6. Run daily factor pipeline
 
 ```bash
-# 单股票单日
-docker compose exec app python scripts/api/query_factors.py --symbol 603019.SH --date 2026-04-30
+docker compose exec app python scripts/factor_daily.py
+```
 
-# 多股票查询（支持重复 --symbol，或单个字符串中带空格/逗号）
+## Common commands
+
+### Reconcile a longer window
+
+```bash
+docker compose exec app python scripts/etl_daily.py --lookback-days 30
+docker compose exec app python scripts/factor_daily.py --lookback-days 30
+```
+
+### Force refresh
+
+```bash
+docker compose exec app python scripts/etl_daily.py --force-update
+docker compose exec app python scripts/factor_daily.py --force-update
+```
+
+### Run selected factors only
+
+```bash
+docker compose exec app python scripts/factor_daily.py --factors rsi14,limit_up
+```
+
+### Query factor values
+
+```bash
+docker compose exec app python scripts/api/query_factors.py --symbol 603019.SH --date 2026-04-30
 docker compose exec app python scripts/api/query_factors.py --symbol "603019.SH 300059.SZ" --date 2026-04-30 --format json
 ```
 
-### 日志
+## Notebook entrypoints
 
-ETL 日志写入 `logs/` 目录（挂载至容器内 `/app/logs`），按时间戳命名：
+After JupyterLab is up, start with:
 
-```
-logs/
-  etl_daily_20260317_093000.log
-  etl_daily_20260318_093001.log
-  ...
-```
+- `notebooks/quick_start/01_quick_start.ipynb`
+- `notebooks/quick_start/02_factor_research.ipynb`
+- `notebooks/quick_start/03_simple_backtest.ipynb`
+- `notebooks/quick_start/04_qlib_backtest.ipynb`
 
-```bash
-# 查看最新 ETL 日志
-tail -f logs/$(ls -t logs/ | head -1)
-```
+## Repo layout
 
-## 项目结构
-
-```
+```text
 .
-├── docker-compose.yml          # 服务编排
-├── Dockerfile                  # Python 应用镜像
-├── requirements.txt            # Python 依赖
-├── .env.example                # 环境变量模板
-│
-├── docker/
-│   ├── timescaledb/
-│   │   └── init.sql            # 数据库初始化 (超表/索引/视图)
-│   └── grafana/
-│       └── provisioning/       # Grafana 数据源预配置
-│
 ├── app/
-│   ├── data_pipeline/
-│   │   └── fetch_daily.py      # Tushare 日线数据拉取 → market.daily
-│   ├── factors/
-│   │   ├── base.py             # BaseFactor 抽象基类
-│   │   ├── technical.py        # MA/RSI/MACD 等技术因子 (ta 库)
-│   │   └── pipeline.py         # 批量计算因子 → factors.daily_factors
-│   ├── strategy/
-│   │   ├── base.py             # BaseStrategy 抽象基类
-│   │   └── momentum.py         # 动量策略示例 (MA金叉 + RSI)
-│   ├── backtest/
-│   │   ├── runner.py           # Qlib 回测入口
-│   │   └── metrics.py          # Sharpe / 最大回撤 / Calmar 等指标
-│   └── utils/
-│       ├── db.py               # 数据库连接工具 (SQLAlchemy 单例)
-│       ├── signals.py          # 信号写入 → signals.trading_signals
-│       └── qlib_helper.py      # Qlib 初始化工具
-│
+│   ├── data_pipeline/        # market data ingestion helpers
+│   ├── factors/              # factor definitions and pipeline logic
+│   ├── services/             # factor query / backfill services
+│   ├── strategy/             # strategy prototypes
+│   ├── backtest/             # backtest scaffolding
+│   └── utils/                # DB, Qlib, signal helpers
+├── config/
+│   └── strategies/
+├── docker/
+│   ├── grafana/
+│   └── timescaledb/
 ├── notebooks/
-│   └── quick_start/
-│       ├── 01_quick_start.ipynb    # 快速入门：数据拉取与写库
-│       ├── 02_factor_research.ipynb # 因子计算与 IC 分析
-│       └── 03_backtest.ipynb       # 策略信号生成与回测绩效
-│
-├── logs/                       # ETL 运行日志（挂载至容器 /app/logs）
-│
 ├── scripts/
 │   ├── api/
-│   │   └── query_factors.py    # 面向调用方的查询 CLI / API entrypoint
-│   ├── etl_daily.py            # ETL 主逻辑 (Python)
-│   ├── factor_daily.py         # 批量运行因子流水线
-│   └── init_qlib_data.py       # Qlib 数据初始化 (一次性)
-│
-└── config/
-    └── strategies/
-        └── momentum.yaml       # 动量策略超参数配置
+│   ├── etl_daily.py
+│   ├── factor_daily.py
+│   └── init_qlib_data.py
+├── logs/
+├── docker-compose.yml
+├── Dockerfile
+└── .env.example
 ```
 
-## 数据库 Schema
+## Important notes
 
+### Docker / Apple Silicon
+
+On Apple Silicon with Colima, this stack was verified more reliably with an **`x86_64` VM** because `pyqlib>=0.9.0` did not install successfully in an `aarch64` container in this setup.
+
+### Database init behavior
+
+`docker/timescaledb/init.sql` only runs on the **first boot with an empty `timescaledb_data` volume**.
+
+If schema changes are not appearing:
+
+```bash
+docker compose down -v
+docker compose up -d
 ```
-quant_db
-├── meta
-│   ├── stocks              # 股票基础信息
-│   └── sync_status         # 数据同步状态
-├── market
-│   ├── daily               # 日线行情 (超表)
-│   ├── minute              # 分钟线行情 (超表)
-│   ├── index_daily         # 指数日线 (超表)
-│   ├── weekly              # 周线 (连续聚合视图)
-│   └── monthly             # 月线 (连续聚合视图)
-├── factors
-│   └── daily_factors       # 因子数据 (超表)
-└── signals
-    └── trading_signals     # 交易信号 (超表)
+
+### Stock pool config
+
+The market ETL expects a local `config/stock_pool.csv` file. This file is intentionally ignored by Git in this repo, so create your own with at least:
+
+```text
+symbol,name
+603019.SH,Stock A
+300059.SZ,Stock B
 ```
+
+## Testing
+
+The checked-in test is:
+
+```bash
+pytest tests/test_tushare_connection.py
+```
+
+It is an integration test that requires:
+
+- a valid `TUSHARE_TOKEN`
+- network access
+
+## What makes this repo useful on GitHub
+
+This project can be valuable to:
+
+- builders who want a clean starting point for A-share quant infra
+- researchers who need reproducible daily factor data pipelines
+- engineers who want a Dockerized reference for Tushare + TimescaleDB + Qlib
+
+It is especially useful because it solves the annoying infra layer that usually gets hand-waved away in quant demos.
+
+## License / publishing note
+
+Before making the repo public, make sure you do **not** publish:
+
+- your real `.env`
+- local logs
+- downloaded datasets
+- database volumes / exports
+- any proprietary stock pool files you do not want to share
+
+Yeah, basic opsec. Don't leak loot.
