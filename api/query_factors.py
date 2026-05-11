@@ -2,10 +2,10 @@
 查询个股因子数据。
 
 用法：
-  python scripts/api/query_factors.py --symbol 603019.SH --factor price_to_ma20
-  python scripts/api/query_factors.py --symbol 603019.SH --factor price_to_ma20 --factor limit_up
-  python scripts/api/query_factors.py --symbol 603019.SH --symbol 300059.SZ --factor price_to_ma20 --date 2026-04-14
-  python scripts/api/query_factors.py --symbol 603019.SH --factor price_to_ma20 --start-date 2026-04-10 --end-date 2026-04-14 --output logs/query.csv
+  python api/query_factors.py --symbol 603019.SH --factor price_to_ma20
+  python api/query_factors.py --symbol 603019.SH --factor price_to_ma20 --factor limit_up
+  python api/query_factors.py --symbol 603019.SH --symbol 300059.SZ --factor price_to_ma20 --date 2026-04-14
+  python api/query_factors.py --symbol 603019.SH --factor price_to_ma20 --start-date 2026-04-10 --end-date 2026-04-14 --output logs/query.csv
 """
 from __future__ import annotations
 

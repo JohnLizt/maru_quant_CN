@@ -3,21 +3,18 @@
 """
 from __future__ import annotations
 
-import csv
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 
 import polars as pl
 from loguru import logger
 
-from app.data_pipeline.fetch_daily import _get_pro, fetch_stock_daily, upsert_daily
+from app.data_pipeline.fetch_daily import fetch_stock_daily, upsert_daily
 from app.factors.pipeline.loader import load_ohlcv
 from app.factors.pipeline.writer import upsert_factors
 from app.factors.registry import DEFAULT_FACTORS, max_warmup_days, required_market_fields
 from app.utils.db import get_engine
 
 
-STOCK_POOL_CSV = Path("/app/config/stock_pool.csv")
 BACKFILL_WINDOW_DAYS = 365
 
 
@@ -32,44 +29,6 @@ def _factor_date_strings(start: date, end: date) -> set[str]:
         dates.add(_yyyymmdd(current))
         current += timedelta(days=1)
     return dates
-
-
-def _fetch_symbol_name(symbol: str) -> str:
-    pro = _get_pro()
-    df = pro.stock_basic(ts_code=symbol, fields="ts_code,name")
-    if df is None or df.empty:
-        return ""
-    return str(df.iloc[0].get("name") or "").strip()
-
-
-def _append_symbol_to_stock_pool(symbol: str) -> None:
-    STOCK_POOL_CSV.parent.mkdir(parents=True, exist_ok=True)
-
-    rows: list[dict[str, str]] = []
-    existing_symbols: set[str] = set()
-    if STOCK_POOL_CSV.exists():
-        with STOCK_POOL_CSV.open("r", encoding="utf-8", newline="") as handle:
-            reader = csv.DictReader(handle)
-            for row in reader:
-                normalized_symbol = str(row.get("symbol", "")).strip().upper()
-                if not normalized_symbol:
-                    continue
-                rows.append({
-                    "symbol": normalized_symbol,
-                    "name": str(row.get("name", "")).strip(),
-                })
-                existing_symbols.add(normalized_symbol)
-
-    if symbol in existing_symbols:
-        return
-
-    rows.append({"symbol": symbol, "name": _fetch_symbol_name(symbol)})
-    rows.sort(key=lambda row: row["symbol"])
-
-    with STOCK_POOL_CSV.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["symbol", "name"])
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 def _compute_symbol_factors(symbol: str, start: date, end: date) -> int:
@@ -119,7 +78,6 @@ def backfill_symbol_factors(symbol: str, *, end_date: date | None = None) -> boo
         )
         return False
 
-    _append_symbol_to_stock_pool(normalized_symbol)
     logger.success(
         f"自动补算完成 | symbol={normalized_symbol} | market_rows={daily_written} | factor_rows={factor_written}"
     )

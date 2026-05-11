@@ -13,13 +13,13 @@
 - One-time Qlib dataset download: `docker compose exec app python scripts/init_qlib_data.py`.
 - Daily market ETL: `docker compose exec app python scripts/etl_daily.py [--lookback-days 30] [--force-update]`.
 - Daily factor pipeline: `docker compose exec app python scripts/factor_daily.py [--lookback-days 30] [--force-update] [--factors ...]`.
-- Query API entrypoint: `docker compose exec app python scripts/api/query_factors.py --symbol 603019.SH --date 2026-04-30`.
+- Query API entrypoint: `docker compose exec app python api/query_factors.py --symbol 603019.SH --date 2026-04-30`.
 
 ## Source-of-truth entrypoints
 - Market ETL entrypoint is `scripts/etl_daily.py`; it derives trading dates from Tushare daily data for `000001.SZ`, filters fetched rows to `config/stock_pool.csv`, treats a date as complete only when every pool symbol is present in `market.daily`, then updates `meta.sync_status`.
 - Market ETL auto-fills suspended pool symbols using prior close (`open/high/low/close=prev_close`, `volume/amount=0`, `pct_change=0`, `is_suspended=true`). Missing rows are only considered errors if Tushare also does not mark the symbol as suspended for that date.
 - Factor entrypoint is `scripts/factor_daily.py`; it reads from `market.daily`, computes factors per symbol with a 90-day warmup window, writes long-format rows into `factors.daily_factors`, then updates `meta.sync_status`.
-- Query entrypoint for external callers is `scripts/api/query_factors.py`; it is a CLI-shaped API over the factor query service and should stay separate from internal ETL / factor pipeline scripts.
+- Query entrypoint for external callers is `api/query_factors.py`; it is a CLI-shaped API over the factor query service and should stay separate from internal ETL / factor pipeline scripts.
 - `factor_daily.py` now loads `is_suspended` from `market.daily`. `BaseFactor` centralizes suspended-row handling via `suspended_policy`: technical factors currently `allow`, while `LimitUpFactor` uses `mask` so停牌日不会产出该事件因子。
 - Signal persistence lives in `app/utils/signals.py` via `upsert_signals()`.
 - DB access should go through `app/utils/db.py`; avoid relying on its localhost fallback because it points to `akshare_db`, not this repo's `quant_db`.

@@ -60,7 +60,13 @@ def _compact_date(value: date) -> str:
     return value.strftime("%Y%m%d")
 
 
-def _parse_sync_last_date(value: str | None) -> date | None:
+def _parse_sync_last_date(value: str | date | datetime | None) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
     if not value:
         return None
     return datetime.strptime(value, "%Y%m%d").date()
@@ -169,6 +175,7 @@ def _get_sync_status(data_type: str) -> SyncStatus | None:
         SELECT data_type, status, last_date, error_msg
         FROM meta.sync_status
         WHERE data_type = :data_type AND symbol IS NULL
+        ORDER BY last_date DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
         LIMIT 1
     """)
 
