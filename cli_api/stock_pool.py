@@ -1,4 +1,4 @@
-"""CRUD API for config/stock_pool.csv."""
+"""CLI API for config/stock_pool.csv."""
 from __future__ import annotations
 
 import argparse

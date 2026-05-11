@@ -96,7 +96,7 @@ services:
       NO_PROXY: timescaledb,redis,localhost,127.0.0.1
     volumes:
       - ./app:/app/app              # 源代码热重载
-      - ./api:/app/api
+      - ./cli_api:/app/cli_api
       - ./notebooks:/app/notebooks
       - ./config:/app/config
       - ./scripts:/app/scripts
@@ -139,7 +139,7 @@ services:
       NO_PROXY: timescaledb,redis,localhost,127.0.0.1
     volumes:
       - ./app:/app/app
-      - ./api:/app/api
+      - ./cli_api:/app/cli_api
       - ./notebooks:/app/notebooks
       - ./config:/app/config
       - qlib_data:/app/qlib_data
