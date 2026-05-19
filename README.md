@@ -214,6 +214,13 @@ docker compose exec app python cli_api/query_factors.py --symbol 603019.SH --dat
 docker compose exec app python cli_api/query_factors.py --symbol "603019.SH 300059.SZ" --date 2026-04-30 --format json
 ```
 
+### Query composite signal scores
+
+```bash
+docker compose exec app python cli_api/query_signal_scores.py --date 2026-05-15 --symbol 000988.SZ --symbol 600126.SH --format json
+docker compose exec app python cli_api/query_signal_scores.py --date 2026-05-15 --format csv
+```
+
 ## Notebook entrypoints
 
 After JupyterLab is up, start with:
