@@ -11,7 +11,7 @@ from loguru import logger
 from app.data_loader.market_data import fetch_daily_by_symbol, upsert_daily
 from app.factors.pipeline.loader import load_ohlcv
 from app.factors.pipeline.writer import upsert_factors
-from app.factors.registry import DEFAULT_FACTORS, max_warmup_days, required_market_fields
+from app.factors.registry import max_warmup_days, required_market_fields, resolve_factors
 from app.utils.db import get_engine
 
 
@@ -32,7 +32,7 @@ def _factor_date_strings(start: date, end: date) -> set[str]:
 
 
 def _compute_symbol_factors(asset_type: str, symbol: str, start: date, end: date) -> int:
-    factors = DEFAULT_FACTORS
+    factors = resolve_factors(asset_type=asset_type)
     engine = get_engine()
     warmup_days = max_warmup_days(factors)
     warmup_start = _yyyymmdd(start - timedelta(days=warmup_days))

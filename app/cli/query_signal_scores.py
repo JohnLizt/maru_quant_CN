@@ -36,13 +36,22 @@ def _expand_symbols(raw_symbols: list[str]) -> list[str]:
     return expanded
 
 
-def _build_json_payload(profile_name: str, normalization_scope: str, df: pl.DataFrame, start_date: str | None, end_date: str | None) -> dict:
+def _build_json_payload(
+    profile_name: str,
+    normalization_scope: str,
+    asset_type: str,
+    top_n: int | None,
+    df: pl.DataFrame,
+    start_date: str | None,
+    end_date: str | None,
+) -> dict:
     results = []
     for row in df.iter_rows(named=True):
         results.append({
             "time": row["time"].isoformat() if row["time"] is not None else None,
             "symbol": row["symbol"],
             "symbol_name": row["symbol_name"],
+            "tag": row.get("tag", ""),
             "raw_factors": {
                 "ma_cross": row["ma_cross"],
                 "price_to_ma20": row["price_to_ma20"],
@@ -60,9 +69,11 @@ def _build_json_payload(profile_name: str, normalization_scope: str, df: pl.Data
 
     query: dict[str, str | None] = {
         "profile": profile_name,
+        "asset_type": asset_type,
         "normalization_scope": normalization_scope,
         "start_date": start_date,
         "end_date": end_date,
+        "top_n": top_n,
     }
     if start_date == end_date:
         query["date"] = start_date
@@ -74,9 +85,19 @@ def _build_json_payload(profile_name: str, normalization_scope: str, df: pl.Data
     }
 
 
-def _print_result(df: pl.DataFrame, output_format: str, *, profile_name: str, normalization_scope: str, start_date: str | None, end_date: str | None) -> None:
+def _print_result(
+    df: pl.DataFrame,
+    output_format: str,
+    *,
+    profile_name: str,
+    normalization_scope: str,
+    asset_type: str,
+    top_n: int | None,
+    start_date: str | None,
+    end_date: str | None,
+) -> None:
     if output_format == "json":
-        payload = _build_json_payload(profile_name, normalization_scope, df, start_date, end_date)
+        payload = _build_json_payload(profile_name, normalization_scope, asset_type, top_n, df, start_date, end_date)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return
 
@@ -97,17 +118,27 @@ def main(
     output_format: str,
     profile_name: str,
     asset_type: str,
+    top_n: int | None,
 ) -> None:
     expanded_symbols = _expand_symbols(symbols)
-    profile, df = query_signal_scores(expanded_symbols, start_date, end_date, asset_type=asset_type, profile_name=profile_name)
+    profile, df = query_signal_scores(
+        expanded_symbols,
+        start_date,
+        end_date,
+        asset_type=asset_type,
+        profile_name=profile_name,
+        top_n=top_n,
+    )
 
     logger.info(
-        "查询信号评分 | profile={} | scope={} | symbols={} | start={} | end={}",
+        "查询信号评分 | asset_type={} | profile={} | scope={} | symbols={} | start={} | end={} | top_n={}",
+        asset_type,
         profile.name,
         profile.normalization_scope,
         expanded_symbols or "ALL",
         start_date or "today",
         end_date or "today",
+        top_n or "ALL",
     )
 
     if df.is_empty():
@@ -118,6 +149,8 @@ def main(
             output_format,
             profile_name=profile.name,
             normalization_scope=profile.normalization_scope,
+            asset_type=asset_type,
+            top_n=top_n,
             start_date=start_date,
             end_date=end_date,
         )
@@ -140,6 +173,7 @@ if __name__ == "__main__":
     parser.add_argument("--profile", default="trend_v1", help="信号评分 profile，默认 trend_v1")
     parser.add_argument("--asset-type", default="stock_CN", help="资产域，默认 stock_CN")
     parser.add_argument("--output", default=None, help="可选：将结果导出为 CSV，如 logs/query_signal_scores.csv")
+    parser.add_argument("--top", type=int, default=None, help="可选：按单日综合分截取前 N 名")
     parser.add_argument("--format", choices=["table", "json", "csv"], default="table", help="输出格式：table（默认）、json、csv")
     args = parser.parse_args()
 
@@ -150,7 +184,7 @@ if __name__ == "__main__":
         end_date = args.date
 
     try:
-        main(args.symbols or [], start_date, end_date, args.output, args.format, args.profile, args.asset_type)
+        main(args.symbols or [], start_date, end_date, args.output, args.format, args.profile, args.asset_type, args.top)
     except ValueError as exc:
         logger.error(str(exc))
         sys.exit(1)

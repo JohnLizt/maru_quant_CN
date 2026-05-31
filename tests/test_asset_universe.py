@@ -11,8 +11,10 @@ from app.services.asset_universe import (
     list_asset_types,
     load_pipeline_universe,
     resolve_pipeline_symbols,
+    write_pipeline_universe_rows,
 )
 from scripts.etl_daily import _resolve_asset_types as resolve_etl_asset_types
+from scripts.etl_daily import _choose_etf_fetch_mode, _resolve_etf_fetch_mode
 from scripts.factor_daily import _resolve_asset_types as resolve_factor_asset_types
 
 
@@ -114,6 +116,46 @@ def test_pipeline_symbol_name_map_comes_from_asset_universe(tmp_path: Path) -> N
     }
 
 
+def test_universe_supports_optional_tag_column_and_preserves_it(tmp_path: Path) -> None:
+    asset_types, universes_dir = _config_paths(tmp_path)
+    _write(
+        asset_types,
+        "\n".join(
+            [
+                "asset_type,display_name,data_source,calendar_key,loader_key,pipeline_universe,enabled",
+                "etf_CN,A股ETF,tushare,CN,tushare,etf_CN,true",
+            ]
+        ),
+    )
+    _write(
+        universes_dir / "etf_CN.csv",
+        "\n".join(
+            [
+                "symbol,name,is_active,tag",
+                "518880.SH,黄金ETF华安,true,gold",
+                "512400.SH,有色金属ETF,true,base_metals",
+            ]
+        ),
+    )
+
+    rows = load_pipeline_universe("etf_CN", path=asset_types, universes_dir=universes_dir)
+
+    assert rows == [
+        {"symbol": "518880.SH", "name": "黄金ETF华安", "is_active": "true", "tag": "gold"},
+        {"symbol": "512400.SH", "name": "有色金属ETF", "is_active": "true", "tag": "base_metals"},
+    ]
+
+    updated_rows = write_pipeline_universe_rows(
+        "etf_CN",
+        rows + [{"symbol": "512000.SH", "name": "券商ETF华宝", "is_active": "true", "tag": "broker"}],
+        path=asset_types,
+        universes_dir=universes_dir,
+    )
+
+    assert updated_rows[-1]["tag"] == "broker"
+    assert (universes_dir / "etf_CN.csv").read_text(encoding="utf-8").splitlines()[0] == "symbol,name,is_active,tag"
+
+
 def test_default_asset_type_resolution_uses_enabled_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     configs = [
         AssetTypeConfig("stock_CN", "A股股票", "tushare", "CN", "tushare", "stock_CN", True),
@@ -126,3 +168,22 @@ def test_default_asset_type_resolution_uses_enabled_registry(monkeypatch: pytest
     assert resolve_factor_asset_types(None) == ["stock_CN", "etf_CN"]
     assert resolve_etl_asset_types(["stock_CN"]) == ["stock_CN"]
     assert resolve_factor_asset_types(["stock_CN"]) == ["stock_CN"]
+
+
+def test_etf_fetch_mode_resolution_and_auto_selection() -> None:
+    assert _resolve_etf_fetch_mode("auto") == "auto"
+    assert _resolve_etf_fetch_mode("by_date") == "by_date"
+    assert _resolve_etf_fetch_mode("by_symbol") == "by_symbol"
+
+    with pytest.raises(ValueError, match="非法取值"):
+        _resolve_etf_fetch_mode("bad_mode")
+
+    assert _choose_etf_fetch_mode("auto", force_update=True, existing_dates=set(), missing_dates=["20260529"]) == "by_symbol"
+    assert _choose_etf_fetch_mode("auto", force_update=False, existing_dates=set(), missing_dates=["20260529"]) == "by_symbol"
+    assert _choose_etf_fetch_mode("auto", force_update=False, existing_dates={"20260528"}, missing_dates=["20260529"]) == "by_date"
+    assert _choose_etf_fetch_mode(
+        "auto",
+        force_update=False,
+        existing_dates={"20260501"},
+        missing_dates=["20260526", "20260527", "20260528", "20260529"],
+    ) == "by_symbol"

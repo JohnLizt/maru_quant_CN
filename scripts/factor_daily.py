@@ -21,7 +21,11 @@ from loguru import logger
 
 from app.factors.pipeline.loader import get_market_dates
 from app.factors.pipeline.runner import run_time_series_factors
-from app.factors.pipeline.validator import get_complete_factor_dates, validate_factor_completeness
+from app.factors.pipeline.validator import (
+    get_complete_factor_dates,
+    get_missing_factor_symbols,
+    validate_factor_completeness,
+)
 from app.factors.pipeline.writer import update_sync_status
 from app.factors.registry import FACTOR_REGISTRY, max_warmup_days, required_market_fields, resolve_factors
 from app.services.asset_universe import list_asset_types, resolve_pipeline_symbols
@@ -61,7 +65,7 @@ def _run_for_asset_type(
     end_str = _yyyymmdd(today)
     start_str = _yyyymmdd(today - timedelta(days=lookback_days))
 
-    factors = resolve_factors(factor_names)
+    factors = resolve_factors(factor_names, asset_type=asset_type)
     symbols = resolve_pipeline_symbols(asset_type)
     market_dates = get_market_dates(engine, start_str, end_str, asset_type)
 
@@ -125,10 +129,20 @@ def _run_for_asset_type(
 
     validation = validate_factor_completeness(engine, asset_type, missing, symbols, factors)
     if not validation.ok:
-        preview = "; ".join(
-            f"{issue.trade_date}:{issue.factor_name}({issue.actual_count}/{issue.expected_count})"
-            for issue in validation.issues[:5]
-        )
+        preview_parts: list[str] = []
+        for issue in validation.issues[:5]:
+            missing_symbols = get_missing_factor_symbols(
+                engine,
+                asset_type,
+                issue.trade_date,
+                symbols,
+                issue.factor_name,
+            )
+            symbol_preview = f" missing={missing_symbols}" if missing_symbols else ""
+            preview_parts.append(
+                f"{issue.trade_date}:{issue.factor_name}({issue.actual_count}/{issue.expected_count}){symbol_preview}"
+            )
+        preview = "; ".join(preview_parts)
         errors.append(
             f"factor coverage incomplete: {len(validation.issues)} issues" + (f" | sample: {preview}" if preview else "")
         )
@@ -152,7 +166,8 @@ def main(
 
     try:
         resolved_asset_types = _resolve_asset_types(asset_types)
-        resolve_factors(factor_names)
+        for asset_type in resolved_asset_types:
+            resolve_factors(factor_names, asset_type=asset_type)
     except ValueError as exc:
         logger.error(str(exc))
         sys.exit(1)
@@ -181,8 +196,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lookback-days",
         type=int,
-        default=7,
-        help="回溯天数（默认 7；每周对账用 30）",
+        default=365,
+        help="回溯天数（默认 365，覆盖 ETF/MA60 所需历史窗口）",
     )
     parser.add_argument(
         "--force-update",

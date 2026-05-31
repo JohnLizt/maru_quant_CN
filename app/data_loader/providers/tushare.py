@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import os
-import time
 
 import polars as pl
 import tushare as ts
 
 
-RATE_LIMIT = 1.25
 CAL_SYMBOL = "000001.SZ"
 STOCK_FIELDS = "ts_code,trade_date,open,high,low,close,pct_chg,vol,amount"
 ETF_FIELDS = "ts_code,trade_date,open,high,low,close,pct_chg,vol,amount"
@@ -77,7 +75,6 @@ class TushareLoader:
     def get_trading_dates(self, asset_type: str, start: str, end: str) -> list[str]:
         self._ensure_supported(asset_type)
         df = self._pro.daily(ts_code=CAL_SYMBOL, start_date=start, end_date=end, fields="trade_date")
-        time.sleep(RATE_LIMIT)
         return sorted(df["trade_date"].tolist())
 
     def fetch_daily_by_date(
@@ -112,7 +109,6 @@ class TushareLoader:
 
     def get_suspended_symbols(self, trade_date: str, symbols: list[str]) -> set[str]:
         df = self._pro.suspend_d(ts_code="", trade_date=trade_date)
-        time.sleep(RATE_LIMIT)
         if df is None or df.empty:
             return set()
         df = df[df["ts_code"].isin(symbols) & df["suspend_type"].isin(SUSPEND_TYPES)]
@@ -129,7 +125,6 @@ class TushareLoader:
             df = self._pro.fund_daily(fields=ETF_FIELDS, **kwargs)
         else:
             raise ValueError(f"Tushare 暂不支持 asset_type={asset_type}")
-        time.sleep(RATE_LIMIT)
         return df
 
     @staticmethod

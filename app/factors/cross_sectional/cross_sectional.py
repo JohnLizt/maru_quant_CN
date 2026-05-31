@@ -30,6 +30,7 @@ class LimitUpFactor(BaseFactor):
         required_fields=("high", "close"),
         ic_min_cross_section=None,
         description="high >= prev_close * 1.1",
+        supported_asset_types=("stock_CN",),
     )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:

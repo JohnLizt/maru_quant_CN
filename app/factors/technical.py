@@ -33,6 +33,7 @@ class PriceToMA20Factor(BaseFactor):
         required_fields=("close",),
         ic_min_cross_section=20,
         description="(close - MA20) / MA20",
+        supported_asset_types=("stock_CN", "etf_CN"),
     )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -60,6 +61,7 @@ class MACrossGactor(BaseFactor):
         required_fields=("close",),
         ic_min_cross_section=20,
         description="(MA20 - MA60) / MA60",
+        supported_asset_types=("stock_CN", "etf_CN"),
     )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -89,6 +91,7 @@ class RSIFactor(BaseFactor):
         required_fields=("close",),
         ic_min_cross_section=20,
         description="RSI(14)",
+        supported_asset_types=("stock_CN", "etf_CN"),
     )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -111,6 +114,7 @@ class MACDNormFactor(BaseFactor):
         required_fields=("close",),
         ic_min_cross_section=20,
         description="MACD diff / close",
+        supported_asset_types=("stock_CN", "etf_CN"),
     )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:

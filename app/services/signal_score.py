@@ -7,7 +7,11 @@ from typing import Any
 import polars as pl
 from sqlalchemy import text
 
-from app.services.asset_universe import get_pipeline_symbol_name_map, normalize_symbol
+from app.services.asset_universe import (
+    get_pipeline_symbol_name_map,
+    get_pipeline_symbol_tag_map,
+    normalize_symbol,
+)
 from app.signals.composite import apply_composite_score
 from app.signals.normalization import apply_signal_profile
 from app.signals.profiles import SignalProfile, get_signal_profile
@@ -19,6 +23,7 @@ SIGNAL_SCORE_SCHEMA: dict[str, pl.DataType] = {
     "asset_type": pl.Utf8,
     "symbol": pl.Utf8,
     "symbol_name": pl.Utf8,
+    "tag": pl.Utf8,
     "ma_cross": pl.Float64,
     "price_to_ma20": pl.Float64,
     "rsi14": pl.Float64,
@@ -126,15 +131,19 @@ def _pivot_factors(df: pl.DataFrame, profile: SignalProfile) -> pl.DataFrame:
 
 def _attach_symbol_names(df: pl.DataFrame, asset_type: str) -> pl.DataFrame:
     stock_pool_map = get_pipeline_symbol_name_map(asset_type)
+    tag_map = get_pipeline_symbol_tag_map(asset_type)
     mapping_rows = [
-        {"symbol": symbol, "symbol_name": name}
+        {"symbol": symbol, "symbol_name": name, "tag": tag_map.get(symbol, "")}
         for symbol, name in stock_pool_map.items()
     ]
     if not mapping_rows:
-        return df.with_columns(pl.lit("").alias("symbol_name"))
+        return df.with_columns([pl.lit("").alias("symbol_name"), pl.lit("").alias("tag")])
 
-    mapping_df = pl.DataFrame(mapping_rows, schema={"symbol": pl.Utf8, "symbol_name": pl.Utf8})
-    return df.join(mapping_df, on="symbol", how="left").with_columns(pl.col("symbol_name").fill_null(""))
+    mapping_df = pl.DataFrame(mapping_rows, schema={"symbol": pl.Utf8, "symbol_name": pl.Utf8, "tag": pl.Utf8})
+    return (
+        df.join(mapping_df, on="symbol", how="left")
+        .with_columns([pl.col("symbol_name").fill_null(""), pl.col("tag").fill_null("")])
+    )
 
 
 def query_signal_scores(
@@ -144,6 +153,7 @@ def query_signal_scores(
     *,
     asset_type: str = "stock_CN",
     profile_name: str = "trend_v1",
+    top_n: int | None = None,
 ) -> tuple[SignalProfile, pl.DataFrame]:
     """Query composite signal scores over the full factor universe."""
 
@@ -166,6 +176,7 @@ def query_signal_scores(
             "asset_type",
             "symbol",
             "symbol_name",
+            "tag",
             *profile.factor_names,
             *[f"{factor_name}_score" for factor_name in profile.factor_names],
             "composite_score",
@@ -180,5 +191,16 @@ def query_signal_scores(
 
     if scored.is_empty():
         return profile, _empty_result()
+
+    if top_n is not None:
+        if top_n <= 0:
+            raise ValueError("top_n 必须大于 0")
+        scored = (
+            scored
+            .with_columns(pl.col("composite_score").rank(method="ordinal", descending=True).over("time").alias("_rank"))
+            .filter(pl.col("_rank") <= top_n)
+            .drop("_rank")
+            .sort(["time", "composite_score", "symbol"], descending=[False, True, False])
+        )
 
     return profile, scored.cast(SIGNAL_SCORE_SCHEMA)

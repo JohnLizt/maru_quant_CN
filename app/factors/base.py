@@ -41,6 +41,9 @@ class BaseFactor(ABC):
     def ic_min_cross_section(self) -> int | None:
         return self.spec.ic_min_cross_section
 
+    def supports_asset_type(self, asset_type: str) -> bool:
+        return asset_type in self.spec.supported_asset_types
+
     @abstractmethod
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         """

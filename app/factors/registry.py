@@ -19,15 +19,30 @@ DEFAULT_FACTORS: list[BaseFactor] = [
 FACTOR_REGISTRY: dict[str, BaseFactor] = {factor.name: factor for factor in DEFAULT_FACTORS}
 
 
-def resolve_factors(factor_names: list[str] | None = None) -> list[BaseFactor]:
+def factors_for_asset_type(asset_type: str) -> list[BaseFactor]:
+    return [factor for factor in DEFAULT_FACTORS if factor.supports_asset_type(asset_type)]
+
+
+def resolve_factors(factor_names: list[str] | None = None, *, asset_type: str | None = None) -> list[BaseFactor]:
     """解析用户指定的因子列表；未指定时返回默认全部因子。"""
+    available_factors = factors_for_asset_type(asset_type) if asset_type else DEFAULT_FACTORS
+    available_names = {factor.name for factor in available_factors}
+
     if not factor_names:
-        return DEFAULT_FACTORS
+        return available_factors
 
     unknown = [name for name in factor_names if name not in FACTOR_REGISTRY]
     if unknown:
         raise ValueError(f"未知因子: {unknown}，可用: {list(FACTOR_REGISTRY)}")
-    return [FACTOR_REGISTRY[name] for name in factor_names]
+
+    if asset_type:
+        unsupported = [name for name in factor_names if name not in available_names]
+        if unsupported:
+            raise ValueError(
+                f"asset_type={asset_type} 不支持因子: {unsupported}，可用: {sorted(available_names)}"
+            )
+
+    return [FACTOR_REGISTRY[name] for name in factor_names if name in available_names or not asset_type]
 
 
 def max_warmup_days(factors: list[BaseFactor]) -> int:

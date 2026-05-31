@@ -111,7 +111,7 @@ The pipeline:
 External callers should use:
 
 ```bash
-docker compose exec app python api/cli/query_factors.py --symbol 603019.SH --date 2026-04-30
+docker compose exec app python app/cli/query_factors.py --symbol 603019.SH --date 2026-04-30
 ```
 
 This is a CLI-style query interface over the factor query service.
@@ -210,15 +210,15 @@ docker compose exec app python scripts/factor_daily.py --factors rsi14,limit_up
 ### Query factor values
 
 ```bash
-docker compose exec app python api/cli/query_factors.py --symbol 603019.SH --date 2026-04-30
-docker compose exec app python api/cli/query_factors.py --symbol "603019.SH 300059.SZ" --date 2026-04-30 --format json
+docker compose exec app python app/cli/query_factors.py --symbol 603019.SH --date 2026-04-30
+docker compose exec app python app/cli/query_factors.py --symbol "603019.SH 300059.SZ" --date 2026-04-30 --format json
 ```
 
 ### Query composite signal scores
 
 ```bash
-docker compose exec app python api/cli/query_signal_scores.py --date 2026-05-15 --symbol 000988.SZ --symbol 600126.SH --format json
-docker compose exec app python api/cli/query_signal_scores.py --date 2026-05-15 --format csv
+docker compose exec app python app/cli/query_signal_scores.py --date 2026-05-15 --symbol 000988.SZ --symbol 600126.SH --format json
+docker compose exec app python app/cli/query_signal_scores.py --date 2026-05-15 --format csv
 ```
 
 ## Notebook entrypoints

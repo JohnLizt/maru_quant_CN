@@ -16,7 +16,7 @@ import polars as pl
 from loguru import logger
 from sqlalchemy import text
 
-from app.factors.registry import FACTOR_REGISTRY
+from app.factors.registry import FACTOR_REGISTRY, resolve_factors
 from app.services.factor_backfill import backfill_symbol_factors
 from app.utils.db import get_engine
 
@@ -101,22 +101,23 @@ def _normalize_symbols(symbols: list[str]) -> list[str]:
     return normalized
 
 
-def _normalize_factor_name(factor_name: str) -> str:
+def _normalize_factor_name(factor_name: str, *, asset_type: str = "stock_CN") -> str:
     """规范化单个因子名称并校验。"""
     normalized_factor = factor_name.strip()
     if not normalized_factor:
         raise ValueError("factor_name 不能为空")
     if normalized_factor not in FACTOR_REGISTRY:
         raise ValueError(f"未知因子: {normalized_factor}，可用: {list(FACTOR_REGISTRY)}")
+    resolve_factors([normalized_factor], asset_type=asset_type)
     return normalized_factor
 
 
-def _normalize_factor_names(factor_names: list[str]) -> list[str]:
+def _normalize_factor_names(factor_names: list[str], *, asset_type: str = "stock_CN") -> list[str]:
     """规范化因子名称列表并去重。"""
     normalized = []
     seen: set[str] = set()
     for factor_name in factor_names:
-        current = _normalize_factor_name(factor_name)
+        current = _normalize_factor_name(factor_name, asset_type=asset_type)
         if current not in seen:
             seen.add(current)
             normalized.append(current)
@@ -357,7 +358,7 @@ def query_stock_factor(
         ValueError: 当参数为空、因子不存在或日期范围非法时抛出
     """
     normalized_symbol = _normalize_symbol(symbol)
-    normalized_factor = _normalize_factor_name(factor_name)
+    normalized_factor = _normalize_factor_name(factor_name, asset_type=asset_type)
     start, end = _normalize_date_range(start_date, end_date)
     return _query_with_auto_backfill(asset_type, [normalized_symbol], [normalized_factor], start, end)
 
@@ -383,7 +384,7 @@ def query_stock_factors(
         Polars DataFrame，列：``time, symbol, factor_name, factor_value``
     """
     normalized_symbol = _normalize_symbol(symbol)
-    normalized_factors = _normalize_factor_names(factor_names)
+    normalized_factors = _normalize_factor_names(factor_names, asset_type=asset_type)
     start, end = _normalize_date_range(start_date, end_date)
     return _query_with_auto_backfill(asset_type, [normalized_symbol], normalized_factors, start, end)
 
@@ -409,6 +410,6 @@ def query_stocks_factors(
         Polars DataFrame，列：``time, symbol, factor_name, factor_value``
     """
     normalized_symbols = _normalize_symbols(symbols)
-    normalized_factors = _normalize_factor_names(factor_names)
+    normalized_factors = _normalize_factor_names(factor_names, asset_type=asset_type)
     start, end = _normalize_date_range(start_date, end_date)
     return _query_with_auto_backfill(asset_type, normalized_symbols, normalized_factors, start, end)

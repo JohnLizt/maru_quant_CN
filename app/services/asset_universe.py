@@ -43,6 +43,10 @@ def _normalize_name(name: str | None) -> str:
     return str(name or "").strip()
 
 
+def _normalize_tag(tag: str | None) -> str:
+    return str(tag or "").strip()
+
+
 def _parse_bool(raw: str | bool | None, *, field_name: str) -> bool:
     if isinstance(raw, bool):
         return raw
@@ -145,11 +149,16 @@ def _read_universe_rows(config: AssetTypeConfig, *, universes_dir: Path = UNIVER
         seen.add(symbol)
 
         is_active = _parse_bool(row.get("is_active", "true"), field_name="is_active")
-        normalized_rows.append({
+        normalized_row = {
             "symbol": symbol,
             "name": _normalize_name(row.get("name")),
             "is_active": "true" if is_active else "false",
-        })
+        }
+        for key, value in row.items():
+            if key in {"symbol", "name", "is_active"}:
+                continue
+            normalized_row[str(key).strip()] = _normalize_tag(value)
+        normalized_rows.append(normalized_row)
 
     if not normalized_rows:
         raise ValueError(f"universe 文件为空: {path}")
@@ -174,6 +183,13 @@ def get_pipeline_symbol_name_map(asset_type: str, *, universes_dir: Path = UNIVE
     return {row["symbol"]: row["name"] for row in load_pipeline_universe(asset_type, universes_dir=universes_dir, path=path)}
 
 
+def get_pipeline_symbol_tag_map(asset_type: str, *, universes_dir: Path = UNIVERSES_DIR, path: Path = ASSET_TYPES_CSV) -> dict[str, str]:
+    return {
+        row["symbol"]: str(row.get("tag", "")).strip()
+        for row in load_pipeline_universe(asset_type, universes_dir=universes_dir, path=path)
+    }
+
+
 def write_pipeline_universe_rows(
     asset_type: str,
     rows: list[dict[str, str | bool]],
@@ -187,23 +203,31 @@ def write_pipeline_universe_rows(
 
     normalized_rows: list[dict[str, str]] = []
     seen: set[str] = set()
+    extra_fieldnames: set[str] = set()
     for row in rows:
         symbol = normalize_symbol(str(row.get("symbol", "")))
         if symbol in seen:
             raise ValueError(f"写入 universe 时发现重复 symbol: {symbol}")
         seen.add(symbol)
-        normalized_rows.append({
+        normalized_row = {
             "symbol": symbol,
             "name": _normalize_name(str(row.get("name", ""))),
             "is_active": "true" if _parse_bool(row.get("is_active", "true"), field_name="is_active") else "false",
-        })
+        }
+        for key, value in row.items():
+            normalized_key = str(key).strip()
+            if normalized_key in {"symbol", "name", "is_active"} or not normalized_key:
+                continue
+            normalized_row[normalized_key] = _normalize_tag(str(value))
+            extra_fieldnames.add(normalized_key)
+        normalized_rows.append(normalized_row)
 
     if not normalized_rows:
         raise ValueError(f"asset_type={asset_type} 的 pipeline universe 不能为空")
 
     normalized_rows.sort(key=lambda row: row["symbol"])
     with target.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["symbol", "name", "is_active"])
+        writer = csv.DictWriter(handle, fieldnames=["symbol", "name", "is_active", *sorted(extra_fieldnames)])
         writer.writeheader()
         writer.writerows(normalized_rows)
 

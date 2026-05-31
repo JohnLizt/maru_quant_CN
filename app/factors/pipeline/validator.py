@@ -81,6 +81,48 @@ def _actual_counts(engine, asset_type: str, start: str, end: str, symbols: list[
     return {(r[0], r[1]): int(r[2]) for r in rows}
 
 
+def get_missing_factor_symbols(
+    engine,
+    asset_type: str,
+    trade_date: str,
+    symbols: list[str],
+    factor_name: str,
+    *,
+    limit: int = 5,
+) -> list[str]:
+    if not symbols:
+        return []
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                WITH universe AS (
+                    SELECT unnest(:symbols) AS symbol
+                )
+                SELECT universe.symbol
+                FROM universe
+                LEFT JOIN factors.daily_factors df
+                  ON df.asset_type = :asset_type
+                 AND df.symbol = universe.symbol
+                 AND df.factor_name = :factor_name
+                 AND TO_CHAR(df.time AT TIME ZONE 'UTC', 'YYYYMMDD') = :trade_date
+                WHERE df.symbol IS NULL
+                ORDER BY universe.symbol
+                LIMIT :limit
+                """
+            ),
+            {
+                "asset_type": asset_type,
+                "trade_date": trade_date,
+                "symbols": symbols,
+                "factor_name": factor_name,
+                "limit": limit,
+            },
+        ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
 def validate_factor_completeness(
     engine,
     asset_type: str,

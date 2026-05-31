@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, "/app")
@@ -25,6 +27,7 @@ from app.services.asset_universe import get_asset_type_config, list_asset_types,
 from app.utils.db import get_engine
 
 DATA_TYPE = "daily_market"
+ETF_FETCH_MODES = {"auto", "by_date", "by_symbol"}
 
 
 def _yyyymmdd(dt: datetime) -> str:
@@ -49,6 +52,70 @@ def _resolve_asset_types(selected_asset_types: list[str] | None) -> list[str]:
             raise ValueError("--asset-type 不能为空")
         return ordered
     return [config.asset_type for config in list_asset_types(enabled_only=True)]
+
+
+def _resolve_etf_fetch_mode(fetch_mode: str) -> str:
+    normalized = str(fetch_mode or "").strip().lower()
+    if normalized not in ETF_FETCH_MODES:
+        raise ValueError(f"--etf-fetch-mode 非法取值: {fetch_mode}，可选: {sorted(ETF_FETCH_MODES)}")
+    return normalized
+
+
+def _choose_etf_fetch_mode(
+    configured_mode: str,
+    *,
+    force_update: bool,
+    existing_dates: set[str],
+    missing_dates: list[str],
+) -> str:
+    mode = _resolve_etf_fetch_mode(configured_mode)
+    if mode != "auto":
+        return mode
+
+    if force_update or not existing_dates:
+        return "by_symbol"
+    if len(missing_dates) <= 3:
+        return "by_date"
+    return "by_symbol"
+
+
+def _fund_daily_rate_limit_wait_seconds(exc: Exception) -> int | None:
+    message = str(exc)
+    if "频率超限" not in message:
+        return None
+    per_hour_match = re.search(r"(\d+)次/小时", message)
+    if per_hour_match:
+        count = max(1, int(per_hour_match.group(1)))
+        return max(2, int(3600 / count) + 5)
+    per_minute_match = re.search(r"(\d+)次/分钟", message)
+    if per_minute_match:
+        count = max(1, int(per_minute_match.group(1)))
+        return max(2, int(60 / count) + 5)
+    return 5
+
+
+def _fetch_with_rate_limit_retry(fetch_fn, *, asset_type: str, request_label: str, max_attempts: int = 2):
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fetch_fn()
+        except Exception as exc:
+            last_exc = exc
+            wait_seconds = _fund_daily_rate_limit_wait_seconds(exc)
+            if wait_seconds is None or attempt >= max_attempts:
+                raise
+            logger.warning(
+                "[{}] {}: 命中 Tushare 限频，等待 {} 秒后重试 ({}/{})",
+                asset_type,
+                request_label,
+                wait_seconds,
+                attempt,
+                max_attempts,
+            )
+            time.sleep(wait_seconds)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"{request_label} 获取失败")
 
 
 def get_existing_dates(engine, asset_type: str, start: str, end: str, symbols: list[str]) -> set[str]:
@@ -108,6 +175,45 @@ def get_incomplete_dates(engine, asset_type: str, start: str, end: str, symbols:
             },
         ).fetchall()
     return [(r[0], r[1]) for r in rows]
+
+
+def get_missing_symbols_for_date(
+    engine,
+    asset_type: str,
+    trade_date: str,
+    symbols: list[str],
+    *,
+    limit: int = 5,
+) -> list[str]:
+    if not symbols:
+        return []
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                WITH universe AS (
+                    SELECT unnest(:symbols) AS symbol
+                )
+                SELECT universe.symbol
+                FROM universe
+                LEFT JOIN market.daily md
+                  ON md.asset_type = :asset_type
+                 AND md.symbol = universe.symbol
+                 AND TO_CHAR(md.time AT TIME ZONE 'UTC', 'YYYYMMDD') = :trade_date
+                WHERE md.symbol IS NULL
+                ORDER BY universe.symbol
+                LIMIT :limit
+                """
+            ),
+            {
+                "asset_type": asset_type,
+                "trade_date": trade_date,
+                "symbols": symbols,
+                "limit": limit,
+            },
+        ).fetchall()
+    return [str(row[0]) for row in rows]
 
 
 def get_previous_closes(engine, asset_type: str, date: str, symbols: list[str]) -> dict[str, float]:
@@ -195,8 +301,42 @@ def _empty_daily_frame() -> pl.DataFrame:
     )
 
 
+def fetch_symbol_window(loader, asset_type: str, symbol: str, start: str, end: str) -> pl.DataFrame:
+    return _fetch_with_rate_limit_retry(
+        lambda: loader.fetch_daily_by_symbol(asset_type, symbol, start, end),
+        asset_type=asset_type,
+        request_label=f"{symbol} {start}~{end}",
+    )
+
+
+def fetch_etf_window(loader, engine, asset_type: str, start: str, end: str, symbols: list[str]) -> tuple[int, list[str]]:
+    if not symbols:
+        return 0, []
+
+    total_written = 0
+    errors: list[str] = []
+    for symbol in symbols:
+        try:
+            df = fetch_symbol_window(loader, asset_type, symbol, start, end)
+            if df.is_empty():
+                logger.warning("[{}] {}: {} ~ {} 无数据，跳过", asset_type, symbol, start, end)
+                continue
+            written = upsert_daily(df, asset_type=asset_type)
+            total_written += written
+            logger.info("[{}] {}: 写入 {} 条 ({} ~ {})", asset_type, symbol, written, start, end)
+        except Exception as exc:
+            logger.error("[{}] {}: 失败 — {}", asset_type, symbol, exc)
+            errors.append(f"{symbol}: {exc}")
+
+    return total_written, errors
+
+
 def fetch_one_date(loader, engine, asset_type: str, date: str, symbols: list[str], data_source: str) -> int:
-    df = loader.fetch_daily_by_date(asset_type, date, symbols)
+    df = _fetch_with_rate_limit_retry(
+        lambda: loader.fetch_daily_by_date(asset_type, date, symbols),
+        asset_type=asset_type,
+        request_label=date,
+    )
     actual_symbols = set(df.get_column("symbol").to_list()) if not df.is_empty() else set()
 
     if asset_type != "stock_CN":
@@ -207,7 +347,11 @@ def fetch_one_date(loader, engine, asset_type: str, date: str, symbols: list[str
 
     missing_symbols = sorted(set(symbols) - actual_symbols)
     if missing_symbols:
-        suspended_symbols = loader.get_suspended_symbols(date, symbols)
+        suspended_symbols = _fetch_with_rate_limit_retry(
+            lambda: loader.get_suspended_symbols(date, symbols),
+            asset_type=asset_type,
+            request_label=f"suspend_d {date}",
+        )
         unresolved = sorted(set(missing_symbols) - suspended_symbols)
         if unresolved:
             raise ValueError(
@@ -266,7 +410,13 @@ def update_sync_status(
         )
 
 
-def _run_for_asset_type(engine, asset_type: str, lookback_days: int, force_update: bool) -> list[str]:
+def _run_for_asset_type(
+    engine,
+    asset_type: str,
+    lookback_days: int,
+    force_update: bool,
+    etf_fetch_mode: str,
+) -> list[str]:
     config = get_asset_type_config(asset_type)
     loader = get_market_data_loader(asset_type)
     symbols = resolve_pipeline_symbols(asset_type)
@@ -297,11 +447,11 @@ def _run_for_asset_type(engine, asset_type: str, lookback_days: int, force_updat
         return []
     logger.info("[{}] 交易日: {} 个 ({} ~ {})", asset_type, len(trade_dates), trade_dates[0], trade_dates[-1])
 
+    existing = set() if force_update else get_existing_dates(engine, asset_type, start_str, end_str, symbols)
     if force_update:
         missing = trade_dates
         logger.info("[{}] 强制模式：重新拉取全部 {} 个交易日", asset_type, len(missing))
     else:
-        existing = get_existing_dates(engine, asset_type, start_str, end_str, symbols)
         missing = [d for d in trade_dates if d not in existing]
         logger.info("[{}] 已完整写入 {} 个交易日，缺失 {}", asset_type, len(existing), len(missing))
 
@@ -309,6 +459,55 @@ def _run_for_asset_type(engine, asset_type: str, lookback_days: int, force_updat
         logger.success("[{}] 数据完整，无需补全", asset_type)
         update_sync_status(engine, asset_type, config.data_source, "ok", trade_dates[-1])
         return []
+
+    if asset_type == "etf_CN":
+        selected_mode = _choose_etf_fetch_mode(
+            etf_fetch_mode,
+            force_update=force_update,
+            existing_dates=existing,
+            missing_dates=missing,
+        )
+        logger.info("[{}] ETF 抓取模式: {}", asset_type, selected_mode)
+
+        if selected_mode == "by_symbol":
+            total_written, errors = fetch_etf_window(loader, engine, asset_type, start_str, end_str, symbols)
+        else:
+            total_written = 0
+            errors = []
+            for date in missing:
+                try:
+                    written = fetch_one_date(loader, engine, asset_type, date, symbols, config.data_source)
+                    total_written += written
+                    logger.info("[{}] {}: 写入 {} 条", asset_type, date, written)
+                except Exception as exc:
+                    logger.error("[{}] {}: 失败 — {}", asset_type, date, exc)
+                    errors.append(f"{date}: {exc}")
+
+        existing = get_existing_dates(engine, asset_type, start_str, end_str, symbols)
+        incomplete = get_incomplete_dates(engine, asset_type, start_str, end_str, symbols)
+        still_missing = [d for d in trade_dates if d not in existing]
+        if still_missing:
+            preview_parts: list[str] = []
+            for trade_date, count in incomplete[:5]:
+                missing_symbols = get_missing_symbols_for_date(engine, asset_type, trade_date, symbols)
+                symbol_preview = f" missing={missing_symbols}" if missing_symbols else ""
+                preview_parts.append(f"{trade_date}({count}/{len(symbols)}){symbol_preview}")
+            preview = ", ".join(preview_parts)
+            errors.append(f"incomplete dates remain: {len(still_missing)}" + (f" | sample: {preview}" if preview else ""))
+
+        if errors:
+            update_sync_status(engine, asset_type, config.data_source, "error", trade_dates[-1], "; ".join(errors))
+            logger.warning(
+                "[{}] ETF ETL 完成（含错误）| 写入 {} 条 | 错误 {}{}",
+                asset_type,
+                total_written,
+                len(errors),
+                f" | 不完整交易日 {len(still_missing)}" if still_missing else "",
+            )
+        else:
+            update_sync_status(engine, asset_type, config.data_source, "ok", trade_dates[-1])
+            logger.success("[{}] ETF ETL 完成 | 写入 {} 条 | 交易日 {} 个", asset_type, total_written, len(trade_dates))
+        return errors
 
     last_success: str | None = None
     errors: list[str] = []
@@ -326,7 +525,12 @@ def _run_for_asset_type(engine, asset_type: str, lookback_days: int, force_updat
     incomplete = get_incomplete_dates(engine, asset_type, start_str, end_str, symbols)
     still_missing = [d for d in trade_dates if d not in existing]
     if still_missing:
-        preview = ", ".join(f"{trade_date}({count}/{len(symbols)})" for trade_date, count in incomplete[:5])
+        preview_parts: list[str] = []
+        for trade_date, count in incomplete[:5]:
+            missing_symbols = get_missing_symbols_for_date(engine, asset_type, trade_date, symbols)
+            symbol_preview = f" missing={missing_symbols}" if missing_symbols else ""
+            preview_parts.append(f"{trade_date}({count}/{len(symbols)}){symbol_preview}")
+        preview = ", ".join(preview_parts)
         errors.append(f"incomplete dates remain: {len(still_missing)}" + (f" | sample: {preview}" if preview else ""))
 
     failed_dates = len([e for e in errors if not e.startswith("incomplete dates remain:")])
@@ -347,10 +551,16 @@ def _run_for_asset_type(engine, asset_type: str, lookback_days: int, force_updat
     return errors
 
 
-def main(lookback_days: int, force_update: bool = False, asset_types: list[str] | None = None) -> None:
+def main(
+    lookback_days: int,
+    force_update: bool = False,
+    asset_types: list[str] | None = None,
+    etf_fetch_mode: str = "auto",
+) -> None:
     engine = get_engine()
     try:
         resolved_asset_types = _resolve_asset_types(asset_types)
+        resolved_etf_fetch_mode = _resolve_etf_fetch_mode(etf_fetch_mode)
     except ValueError as exc:
         logger.error(str(exc))
         sys.exit(1)
@@ -358,7 +568,7 @@ def main(lookback_days: int, force_update: bool = False, asset_types: list[str] 
     aggregated_errors: list[str] = []
     for asset_type in resolved_asset_types:
         try:
-            errors = _run_for_asset_type(engine, asset_type, lookback_days, force_update)
+            errors = _run_for_asset_type(engine, asset_type, lookback_days, force_update, resolved_etf_fetch_mode)
             aggregated_errors.extend(f"[{asset_type}] {error}" for error in errors)
         except Exception as exc:
             logger.error("[{}] ETL 失败 — {}", asset_type, exc)
@@ -373,8 +583,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lookback-days",
         type=int,
-        default=7,
-        help="回溯天数（默认 7；每周对账用 30）",
+        default=365,
+        help="回溯天数（默认 365，覆盖 ETF/MA60 所需历史窗口）",
     )
     parser.add_argument(
         "--force-update",
@@ -388,5 +598,11 @@ if __name__ == "__main__":
         default=[],
         help="可重复传入，仅执行指定 asset_type；不传则遍历全部 enabled asset_type",
     )
+    parser.add_argument(
+        "--etf-fetch-mode",
+        choices=sorted(ETF_FETCH_MODES),
+        default="auto",
+        help="ETF 抓取模式：auto（默认，智能选择）、by_symbol（按标的拉区间）、by_date（按全市场拉单日）",
+    )
     args = parser.parse_args()
-    main(args.lookback_days, args.force_update, args.asset_types or None)
+    main(args.lookback_days, args.force_update, args.asset_types or None, args.etf_fetch_mode)
