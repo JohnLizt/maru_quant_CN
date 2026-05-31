@@ -23,6 +23,7 @@ from app.utils.db import get_engine
 
 FACTOR_QUERY_SCHEMA: dict[str, pl.DataType] = {
     "time": pl.Datetime("us", "UTC"),
+    "asset_type": pl.Utf8,
     "symbol": pl.Utf8,
     "factor_name": pl.Utf8,
     "factor_value": pl.Float64,
@@ -138,12 +139,13 @@ def _normalize_date_range(
     return start, end
 
 
-def _query_factors(symbols: list[str], factor_names: list[str], start: date, end: date) -> pl.DataFrame:
+def _query_factors(asset_type: str, symbols: list[str], factor_names: list[str], start: date, end: date) -> pl.DataFrame:
     """执行因子范围查询。"""
     sql = text("""
-        SELECT time, symbol, factor_name, factor_value
+        SELECT time, asset_type, symbol, factor_name, factor_value
         FROM factors.daily_factors
-        WHERE symbol = ANY(:symbols)
+        WHERE asset_type = :asset_type
+          AND symbol = ANY(:symbols)
           AND factor_name = ANY(:factor_names)
           AND time >= :start_date
           AND time < (CAST(:end_date AS date) + INTERVAL '1 day')
@@ -151,6 +153,7 @@ def _query_factors(symbols: list[str], factor_names: list[str], start: date, end
     """)
 
     params: dict[str, Any] = {
+        "asset_type": asset_type,
         "symbols": symbols,
         "factor_names": factor_names,
         "start_date": start.isoformat(),
@@ -165,22 +168,24 @@ def _query_factors(symbols: list[str], factor_names: list[str], start: date, end
 
     return pl.DataFrame(
         rows,
-        schema=["time", "symbol", "factor_name", "factor_value"],
+        schema=["time", "asset_type", "symbol", "factor_name", "factor_value"],
         orient="row",
     ).cast(FACTOR_QUERY_SCHEMA)
 
 
-def _get_sync_status(data_type: str) -> SyncStatus | None:
+def _get_sync_status(data_type: str, asset_type: str) -> SyncStatus | None:
     sql = text("""
         SELECT data_type, status, last_date, error_msg
         FROM meta.sync_status
-        WHERE data_type = :data_type AND symbol IS NULL
+        WHERE data_type = :data_type
+          AND asset_type = :asset_type
+          AND (symbol IS NULL OR symbol = '')
         ORDER BY last_date DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
         LIMIT 1
     """)
 
     with get_engine().connect() as conn:
-        row = conn.execute(sql, {"data_type": data_type}).fetchone()
+        row = conn.execute(sql, {"data_type": data_type, "asset_type": asset_type}).fetchone()
 
     if row is None:
         return None
@@ -193,21 +198,23 @@ def _get_sync_status(data_type: str) -> SyncStatus | None:
     )
 
 
-def _get_market_symbol_count(target: date) -> int:
+def _get_market_symbol_count(asset_type: str, target: date) -> int:
     sql = text("""
         SELECT COUNT(DISTINCT symbol)
         FROM market.daily
-        WHERE time >= :start_date
+        WHERE asset_type = :asset_type
+          AND time >= :start_date
           AND time < (CAST(:start_date AS date) + INTERVAL '1 day')
     """)
 
     with get_engine().connect() as conn:
-        value = conn.execute(sql, {"start_date": target.isoformat()}).scalar()
+        value = conn.execute(sql, {"asset_type": asset_type, "start_date": target.isoformat()}).scalar()
 
     return int(value or 0)
 
 
 def _can_auto_backfill(
+    asset_type: str,
     symbols: list[str],
     start: date,
     end: date,
@@ -242,7 +249,7 @@ def _can_auto_backfill(
         )
         return False
 
-    market_symbol_count = _get_market_symbol_count(start)
+    market_symbol_count = _get_market_symbol_count(asset_type, start)
     if market_symbol_count <= 0:
         logger.info(
             "market.daily 当天无记录，跳过自动补算 | date={} | missing_symbols={}",
@@ -251,7 +258,7 @@ def _can_auto_backfill(
         )
         return False
 
-    market_sync = _get_sync_status(MARKET_SYNC_DATA_TYPE)
+    market_sync = _get_sync_status(MARKET_SYNC_DATA_TYPE, asset_type)
     if market_sync is None or market_sync.last_date is None:
         logger.info(
             "market.daily sync_status 缺失，跳过自动补算 | date={} | missing_symbols={}",
@@ -269,7 +276,7 @@ def _can_auto_backfill(
         )
         return False
 
-    factor_sync = _get_sync_status(FACTOR_SYNC_DATA_TYPE)
+    factor_sync = _get_sync_status(FACTOR_SYNC_DATA_TYPE, asset_type)
     if factor_sync is None or factor_sync.last_date is None:
         logger.info(
             "daily_factors sync_status 缺失，跳过自动补算 | date={} | missing_symbols={}",
@@ -300,27 +307,27 @@ def _can_auto_backfill(
     return True
 
 
-def _query_with_auto_backfill(symbols: list[str], factor_names: list[str], start: date, end: date) -> pl.DataFrame:
+def _query_with_auto_backfill(asset_type: str, symbols: list[str], factor_names: list[str], start: date, end: date) -> pl.DataFrame:
     """查询因子；若存在缺失股票则自动补算并重试。"""
-    result = _query_factors(symbols, factor_names, start, end)
+    result = _query_factors(asset_type, symbols, factor_names, start, end)
 
     found_symbols = set(result.get_column("symbol").to_list()) if not result.is_empty() else set()
     missing_symbols = [symbol for symbol in symbols if symbol not in found_symbols]
     if not missing_symbols:
         return result
 
-    if not _can_auto_backfill(symbols, start, end, result, missing_symbols):
+    if not _can_auto_backfill(asset_type, symbols, start, end, result, missing_symbols):
         return result
 
     backfilled = False
     for symbol in missing_symbols:
         logger.info("开始补算缺失 symbol | date={} | symbol={}", start, symbol)
-        if backfill_symbol_factors(symbol, end_date=end):
+        if backfill_symbol_factors(symbol, asset_type=asset_type, end_date=end):
             backfilled = True
 
     if backfilled:
         logger.info("自动补算完成，重试因子查询 | date={} | symbols={}", start, symbols)
-        return _query_factors(symbols, factor_names, start, end)
+        return _query_factors(asset_type, symbols, factor_names, start, end)
 
     logger.info("自动补算未产出新数据，返回原始查询结果 | date={} | missing_symbols={}", start, missing_symbols)
     return result
@@ -331,6 +338,8 @@ def query_stock_factor(
     factor_name: str,
     start_date: str | date | datetime | None = None,
     end_date: str | date | datetime | None = None,
+    *,
+    asset_type: str = "stock_CN",
 ) -> pl.DataFrame:
     """
     查询单个股票单个因子在指定时间范围内的因子值。
@@ -350,7 +359,7 @@ def query_stock_factor(
     normalized_symbol = _normalize_symbol(symbol)
     normalized_factor = _normalize_factor_name(factor_name)
     start, end = _normalize_date_range(start_date, end_date)
-    return _query_with_auto_backfill([normalized_symbol], [normalized_factor], start, end)
+    return _query_with_auto_backfill(asset_type, [normalized_symbol], [normalized_factor], start, end)
 
 
 def query_stock_factors(
@@ -358,6 +367,8 @@ def query_stock_factors(
     factor_names: list[str],
     start_date: str | date | datetime | None = None,
     end_date: str | date | datetime | None = None,
+    *,
+    asset_type: str = "stock_CN",
 ) -> pl.DataFrame:
     """
     查询单个股票多个因子在指定时间范围内的因子值。
@@ -374,7 +385,7 @@ def query_stock_factors(
     normalized_symbol = _normalize_symbol(symbol)
     normalized_factors = _normalize_factor_names(factor_names)
     start, end = _normalize_date_range(start_date, end_date)
-    return _query_with_auto_backfill([normalized_symbol], normalized_factors, start, end)
+    return _query_with_auto_backfill(asset_type, [normalized_symbol], normalized_factors, start, end)
 
 
 def query_stocks_factors(
@@ -382,6 +393,8 @@ def query_stocks_factors(
     factor_names: list[str],
     start_date: str | date | datetime | None = None,
     end_date: str | date | datetime | None = None,
+    *,
+    asset_type: str = "stock_CN",
 ) -> pl.DataFrame:
     """
     查询多个股票多个因子在指定时间范围内的因子值。
@@ -398,4 +411,4 @@ def query_stocks_factors(
     normalized_symbols = _normalize_symbols(symbols)
     normalized_factors = _normalize_factor_names(factor_names)
     start, end = _normalize_date_range(start_date, end_date)
-    return _query_with_auto_backfill(normalized_symbols, normalized_factors, start, end)
+    return _query_with_auto_backfill(asset_type, normalized_symbols, normalized_factors, start, end)

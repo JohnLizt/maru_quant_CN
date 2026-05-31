@@ -27,6 +27,9 @@ def upsert_signals(df: pl.DataFrame) -> int:
     if df.is_empty():
         return 0
 
+    if "asset_type" not in df.columns:
+        df = df.with_columns(pl.lit("stock_CN").alias("asset_type"))
+
     rows = df.to_dicts()
     for row in rows:
         if "metadata" not in row or row["metadata"] is None:
@@ -36,10 +39,10 @@ def upsert_signals(df: pl.DataFrame) -> int:
 
     sql = text("""
         INSERT INTO signals.trading_signals
-            (time, symbol, strategy, signal, score, metadata)
+            (time, asset_type, symbol, strategy, signal, score, metadata)
         VALUES
-            (:time, :symbol, :strategy, :signal, :score, CAST(:metadata AS jsonb))
-        ON CONFLICT (time, symbol, strategy) DO UPDATE SET
+            (:time, :asset_type, :symbol, :strategy, :signal, :score, CAST(:metadata AS jsonb))
+        ON CONFLICT (time, asset_type, symbol, strategy) DO UPDATE SET
             signal   = EXCLUDED.signal,
             score    = EXCLUDED.score,
             metadata = EXCLUDED.metadata

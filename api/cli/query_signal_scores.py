@@ -7,8 +7,13 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
-sys.path.insert(0, "/app")
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+for candidate in ["/app", str(REPO_ROOT)]:
+    if candidate not in sys.path:
+        sys.path.insert(0, candidate)
 
 import polars as pl
 from loguru import logger
@@ -91,9 +96,10 @@ def main(
     output: str | None,
     output_format: str,
     profile_name: str,
+    asset_type: str,
 ) -> None:
     expanded_symbols = _expand_symbols(symbols)
-    profile, df = query_signal_scores(expanded_symbols, start_date, end_date, profile_name=profile_name)
+    profile, df = query_signal_scores(expanded_symbols, start_date, end_date, asset_type=asset_type, profile_name=profile_name)
 
     logger.info(
         "查询信号评分 | profile={} | scope={} | symbols={} | start={} | end={}",
@@ -127,43 +133,14 @@ if __name__ == "__main__":
     default_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     parser = argparse.ArgumentParser(description="Query composite signal scores for one or more stocks")
-    parser.add_argument(
-        "--symbol",
-        action="append",
-        dest="symbols",
-        help="股票代码，可重复传入多次；不传则返回全池结果",
-    )
-    parser.add_argument(
-        "--date",
-        default=None,
-        help=f"单日查询日期 YYYY-MM-DD（会同时作为 start/end，默认 {default_today}）",
-    )
-    parser.add_argument(
-        "--start-date",
-        default=None,
-        help="开始日期 YYYY-MM-DD",
-    )
-    parser.add_argument(
-        "--end-date",
-        default=None,
-        help="结束日期 YYYY-MM-DD",
-    )
-    parser.add_argument(
-        "--profile",
-        default="trend_v1",
-        help="信号评分 profile，默认 trend_v1",
-    )
-    parser.add_argument(
-        "--output",
-        default=None,
-        help="可选：将结果导出为 CSV，如 logs/query_signal_scores.csv",
-    )
-    parser.add_argument(
-        "--format",
-        choices=["table", "json", "csv"],
-        default="table",
-        help="输出格式：table（默认）、json、csv",
-    )
+    parser.add_argument("--symbol", action="append", dest="symbols", help="股票代码，可重复传入多次；不传则返回全池结果")
+    parser.add_argument("--date", default=None, help=f"单日查询日期 YYYY-MM-DD（会同时作为 start/end，默认 {default_today}）")
+    parser.add_argument("--start-date", default=None, help="开始日期 YYYY-MM-DD")
+    parser.add_argument("--end-date", default=None, help="结束日期 YYYY-MM-DD")
+    parser.add_argument("--profile", default="trend_v1", help="信号评分 profile，默认 trend_v1")
+    parser.add_argument("--asset-type", default="stock_CN", help="资产域，默认 stock_CN")
+    parser.add_argument("--output", default=None, help="可选：将结果导出为 CSV，如 logs/query_signal_scores.csv")
+    parser.add_argument("--format", choices=["table", "json", "csv"], default="table", help="输出格式：table（默认）、json、csv")
     args = parser.parse_args()
 
     start_date = args.start_date
@@ -173,7 +150,7 @@ if __name__ == "__main__":
         end_date = args.date
 
     try:
-        main(args.symbols or [], start_date, end_date, args.output, args.format, args.profile)
+        main(args.symbols or [], start_date, end_date, args.output, args.format, args.profile, args.asset_type)
     except ValueError as exc:
         logger.error(str(exc))
         sys.exit(1)

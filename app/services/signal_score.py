@@ -7,7 +7,7 @@ from typing import Any
 import polars as pl
 from sqlalchemy import text
 
-from app.services.stock_pool import get_stock_pool_map, normalize_symbol
+from app.services.asset_universe import get_pipeline_symbol_name_map, normalize_symbol
 from app.signals.composite import apply_composite_score
 from app.signals.normalization import apply_signal_profile
 from app.signals.profiles import SignalProfile, get_signal_profile
@@ -16,6 +16,7 @@ from app.utils.db import get_engine
 
 SIGNAL_SCORE_SCHEMA: dict[str, pl.DataType] = {
     "time": pl.Datetime("us", "UTC"),
+    "asset_type": pl.Utf8,
     "symbol": pl.Utf8,
     "symbol_name": pl.Utf8,
     "ma_cross": pl.Float64,
@@ -75,17 +76,19 @@ def _empty_result() -> pl.DataFrame:
     return pl.DataFrame(schema=SIGNAL_SCORE_SCHEMA)
 
 
-def _query_universe_factors(profile: SignalProfile, start: date, end: date) -> pl.DataFrame:
+def _query_universe_factors(profile: SignalProfile, asset_type: str, start: date, end: date) -> pl.DataFrame:
     sql = text("""
-        SELECT time, symbol, factor_name, factor_value
+        SELECT time, asset_type, symbol, factor_name, factor_value
         FROM factors.daily_factors
-        WHERE factor_name = ANY(:factor_names)
+        WHERE asset_type = :asset_type
+          AND factor_name = ANY(:factor_names)
           AND time >= :start_date
           AND time < (CAST(:end_date AS date) + INTERVAL '1 day')
         ORDER BY time, symbol, factor_name
     """)
 
     params: dict[str, Any] = {
+        "asset_type": asset_type,
         "factor_names": profile.factor_names,
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
@@ -97,6 +100,7 @@ def _query_universe_factors(profile: SignalProfile, start: date, end: date) -> p
     if not rows:
         return pl.DataFrame(schema={
             "time": pl.Datetime("us", "UTC"),
+            "asset_type": pl.Utf8,
             "symbol": pl.Utf8,
             "factor_name": pl.Utf8,
             "factor_value": pl.Float64,
@@ -104,13 +108,13 @@ def _query_universe_factors(profile: SignalProfile, start: date, end: date) -> p
 
     return pl.DataFrame(
         rows,
-        schema=["time", "symbol", "factor_name", "factor_value"],
+        schema=["time", "asset_type", "symbol", "factor_name", "factor_value"],
         orient="row",
     ).with_columns(pl.col("factor_value").cast(pl.Float64))
 
 
 def _pivot_factors(df: pl.DataFrame, profile: SignalProfile) -> pl.DataFrame:
-    wide = df.pivot(values="factor_value", index=["time", "symbol"], on="factor_name").sort(["time", "symbol"])
+    wide = df.pivot(values="factor_value", index=["time", "asset_type", "symbol"], on="factor_name").sort(["time", "symbol"])
 
     missing_columns = [factor_name for factor_name in profile.factor_names if factor_name not in wide.columns]
     for factor_name in missing_columns:
@@ -120,8 +124,8 @@ def _pivot_factors(df: pl.DataFrame, profile: SignalProfile) -> pl.DataFrame:
     return wide.filter(pl.all_horizontal(validity_checks))
 
 
-def _attach_symbol_names(df: pl.DataFrame) -> pl.DataFrame:
-    stock_pool_map = get_stock_pool_map()
+def _attach_symbol_names(df: pl.DataFrame, asset_type: str) -> pl.DataFrame:
+    stock_pool_map = get_pipeline_symbol_name_map(asset_type)
     mapping_rows = [
         {"symbol": symbol, "symbol_name": name}
         for symbol, name in stock_pool_map.items()
@@ -138,6 +142,7 @@ def query_signal_scores(
     start_date: str | date | datetime | None = None,
     end_date: str | date | datetime | None = None,
     *,
+    asset_type: str = "stock_CN",
     profile_name: str = "trend_v1",
 ) -> tuple[SignalProfile, pl.DataFrame]:
     """Query composite signal scores over the full factor universe."""
@@ -146,7 +151,7 @@ def query_signal_scores(
     normalized_symbols = _normalize_symbols(symbols)
     start, end = _normalize_date_range(start_date, end_date)
 
-    raw_factors = _query_universe_factors(profile, start, end)
+    raw_factors = _query_universe_factors(profile, asset_type, start, end)
     if raw_factors.is_empty():
         return profile, _empty_result()
 
@@ -155,9 +160,10 @@ def query_signal_scores(
         .pipe(_pivot_factors, profile=profile)
         .pipe(apply_signal_profile, profile=profile)
         .pipe(apply_composite_score, profile=profile)
-        .pipe(_attach_symbol_names)
+        .pipe(_attach_symbol_names, asset_type=asset_type)
         .select([
             "time",
+            "asset_type",
             "symbol",
             "symbol_name",
             *profile.factor_names,

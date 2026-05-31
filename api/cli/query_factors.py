@@ -2,10 +2,10 @@
 查询个股因子数据。
 
 用法：
-  python cli_api/query_factors.py --symbol 603019.SH --factor price_to_ma20
-  python cli_api/query_factors.py --symbol 603019.SH --factor price_to_ma20 --factor limit_up
-  python cli_api/query_factors.py --symbol 603019.SH --symbol 300059.SZ --factor price_to_ma20 --date 2026-04-14
-  python cli_api/query_factors.py --symbol 603019.SH --factor price_to_ma20 --start-date 2026-04-10 --end-date 2026-04-14 --output logs/query.csv
+  python api/cli/query_factors.py --symbol 603019.SH --factor price_to_ma20
+  python api/cli/query_factors.py --symbol 603019.SH --factor price_to_ma20 --factor limit_up
+  python api/cli/query_factors.py --symbol 603019.SH --symbol 300059.SZ --factor price_to_ma20 --date 2026-04-14
+  python api/cli/query_factors.py --symbol 603019.SH --factor price_to_ma20 --start-date 2026-04-10 --end-date 2026-04-14 --output logs/query.csv
 """
 from __future__ import annotations
 
@@ -15,8 +15,13 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
-sys.path.insert(0, "/app")
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+for candidate in ["/app", str(REPO_ROOT)]:
+    if candidate not in sys.path:
+        sys.path.insert(0, candidate)
 
 from loguru import logger
 
@@ -25,7 +30,6 @@ from app.services.factor_query import query_stock_factor, query_stock_factors, q
 
 
 def _expand_symbols(raw_symbols: list[str]) -> list[str]:
-    """Expand repeated or string-packed --symbol inputs into normalized symbols."""
     expanded: list[str] = []
     seen: set[str] = set()
 
@@ -41,14 +45,12 @@ def _expand_symbols(raw_symbols: list[str]) -> list[str]:
 
 
 def _resolve_factors(factors: list[str]) -> list[str]:
-    """Resolve requested factors; default to all registered factors."""
     if factors:
         return factors
     return list(FACTOR_REGISTRY)
 
 
 def _print_result(df, output_format: str) -> None:
-    """Print results in the requested format."""
     if output_format == "json":
         print(json.dumps(df.to_dicts(), ensure_ascii=False, default=str))
         return
@@ -106,44 +108,13 @@ if __name__ == "__main__":
     default_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     parser = argparse.ArgumentParser(description="Query factor values for one or more stocks")
-    parser.add_argument(
-        "--symbol",
-        action="append",
-        dest="symbols",
-        help="股票代码，可重复传入多次，如 --symbol 603019.SH --symbol 300059.SZ",
-    )
-    parser.add_argument(
-        "--factor",
-        action="append",
-        dest="factors",
-        help="因子名称，可重复传入多次；不传则默认查询全部已注册因子",
-    )
-    parser.add_argument(
-        "--date",
-        default=None,
-        help=f"单日查询日期 YYYY-MM-DD（会同时作为 start/end，默认 {default_today}）",
-    )
-    parser.add_argument(
-        "--start-date",
-        default=None,
-        help="开始日期 YYYY-MM-DD",
-    )
-    parser.add_argument(
-        "--end-date",
-        default=None,
-        help="结束日期 YYYY-MM-DD",
-    )
-    parser.add_argument(
-        "--output",
-        default=None,
-        help="可选：将结果导出为 CSV，如 logs/query_factors.csv",
-    )
-    parser.add_argument(
-        "--format",
-        choices=["table", "json", "csv"],
-        default="table",
-        help="输出格式：table（默认）、json、csv",
-    )
+    parser.add_argument("--symbol", action="append", dest="symbols", help="股票代码，可重复传入多次，如 --symbol 603019.SH --symbol 300059.SZ")
+    parser.add_argument("--factor", action="append", dest="factors", help="因子名称，可重复传入多次；不传则默认查询全部已注册因子")
+    parser.add_argument("--date", default=None, help=f"单日查询日期 YYYY-MM-DD（会同时作为 start/end，默认 {default_today}）")
+    parser.add_argument("--start-date", default=None, help="开始日期 YYYY-MM-DD")
+    parser.add_argument("--end-date", default=None, help="结束日期 YYYY-MM-DD")
+    parser.add_argument("--output", default=None, help="可选：将结果导出为 CSV，如 logs/query_factors.csv")
+    parser.add_argument("--format", choices=["table", "json", "csv"], default="table", help="输出格式：table（默认）、json、csv")
     args = parser.parse_args()
 
     start_date = args.start_date

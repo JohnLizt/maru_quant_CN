@@ -22,6 +22,7 @@ class RunResult:
 
 def run_time_series_factors(
     engine,
+    asset_type: str,
     symbols: list[str],
     factors: list[BaseFactor],
     warmup_start: str,
@@ -30,13 +31,13 @@ def run_time_series_factors(
     market_fields: set[str],
     rate_limit: float = 0.05,
 ) -> RunResult:
-    """按股票逐一执行时序因子并写入结果。"""
+    """按 symbol 逐一执行时序因子并写入结果。"""
     total_written = 0
     errors: list[str] = []
 
     for i, symbol in enumerate(symbols, 1):
         try:
-            df = load_ohlcv(engine, symbol, warmup_start, end_str, market_fields)
+            df = load_ohlcv(engine, asset_type, symbol, warmup_start, end_str, market_fields)
             if df.is_empty():
                 continue
 
@@ -46,14 +47,14 @@ def run_time_series_factors(
                 long_df = long_df.filter(
                     pl.col("time").dt.strftime("%Y%m%d").is_in(target_dates)
                 )
-                written += upsert_factors(engine, long_df)
+                written += upsert_factors(engine, long_df, asset_type=asset_type)
 
             total_written += written
             if i % 100 == 0:
-                logger.info(f"  进度 {i}/{len(symbols)} | 累计写入 {total_written} 条")
+                logger.info(f"  [{asset_type}] 进度 {i}/{len(symbols)} | 累计写入 {total_written} 条")
 
         except Exception as exc:
-            logger.error(f"  {symbol}: 失败 — {exc}")
+            logger.error(f"  [{asset_type}] {symbol}: 失败 — {exc}")
             errors.append(f"{symbol}: {exc}")
 
         time.sleep(rate_limit)

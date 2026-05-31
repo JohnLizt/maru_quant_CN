@@ -1,0 +1,4 @@
+asset_type,display_name,data_source,calendar_key,loader_key,pipeline_universe,enabled
+stock_CN,A股股票,tushare,CN,tushare,stock_CN,true
+etf_CN,A股ETF,tushare,CN,tushare,etf_CN,false
+stock_US,美股,yahoo,US,yahoo,stock_US,false

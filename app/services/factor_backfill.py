@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 import polars as pl
 from loguru import logger
 
-from app.data_pipeline.fetch_daily import fetch_stock_daily, upsert_daily
+from app.data_loader.market_data import fetch_daily_by_symbol, upsert_daily
 from app.factors.pipeline.loader import load_ohlcv
 from app.factors.pipeline.writer import upsert_factors
 from app.factors.registry import DEFAULT_FACTORS, max_warmup_days, required_market_fields
@@ -31,7 +31,7 @@ def _factor_date_strings(start: date, end: date) -> set[str]:
     return dates
 
 
-def _compute_symbol_factors(symbol: str, start: date, end: date) -> int:
+def _compute_symbol_factors(asset_type: str, symbol: str, start: date, end: date) -> int:
     factors = DEFAULT_FACTORS
     engine = get_engine()
     warmup_days = max_warmup_days(factors)
@@ -40,7 +40,7 @@ def _compute_symbol_factors(symbol: str, start: date, end: date) -> int:
     target_dates = _factor_date_strings(start, end)
     market_fields = required_market_fields(factors)
 
-    df = load_ohlcv(engine, symbol, warmup_start, end_str, market_fields)
+    df = load_ohlcv(engine, asset_type, symbol, warmup_start, end_str, market_fields)
     if df.is_empty():
         return 0
 
@@ -49,11 +49,11 @@ def _compute_symbol_factors(symbol: str, start: date, end: date) -> int:
         long_df = factor.compute(df).filter(
             pl.col("time").dt.strftime("%Y%m%d").is_in(target_dates)
         )
-        written += upsert_factors(engine, long_df)
+        written += upsert_factors(engine, long_df, asset_type=asset_type)
     return written
 
 
-def backfill_symbol_factors(symbol: str, *, end_date: date | None = None) -> bool:
+def backfill_symbol_factors(symbol: str, *, asset_type: str = "stock_CN", end_date: date | None = None) -> bool:
     """补齐单只股票过去一年行情与因子；成功后加入全局股票池。"""
     normalized_symbol = symbol.strip().upper()
     if not normalized_symbol:
@@ -64,14 +64,14 @@ def backfill_symbol_factors(symbol: str, *, end_date: date | None = None) -> boo
     start_str = _yyyymmdd(start)
     end_str = _yyyymmdd(end)
 
-    logger.info(f"触发自动补算 | symbol={normalized_symbol} | window={start_str}~{end_str}")
-    daily_df = fetch_stock_daily(normalized_symbol, start_str, end_str)
+    logger.info(f"触发自动补算 | asset_type={asset_type} | symbol={normalized_symbol} | window={start_str}~{end_str}")
+    daily_df = fetch_daily_by_symbol(asset_type, normalized_symbol, start_str, end_str)
     if daily_df.is_empty():
         logger.warning(f"自动补算失败：{normalized_symbol} 无可用日线数据")
         return False
 
-    daily_written = upsert_daily(daily_df)
-    factor_written = _compute_symbol_factors(normalized_symbol, start, end)
+    daily_written = upsert_daily(daily_df, asset_type=asset_type)
+    factor_written = _compute_symbol_factors(asset_type, normalized_symbol, start, end)
     if factor_written <= 0:
         logger.warning(
             f"自动补算未产出因子 | symbol={normalized_symbol} | market_rows={daily_written}"

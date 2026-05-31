@@ -35,6 +35,7 @@ COMMENT ON TABLE meta.stocks IS '股票基础信息';
 -- ════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS market.daily (
     time            TIMESTAMPTZ  NOT NULL,   -- 交易日 (UTC)
+    asset_type      VARCHAR(32)  NOT NULL DEFAULT 'stock_CN',
     symbol          VARCHAR(10)  NOT NULL,   -- 股票代码
     open            NUMERIC(12,4),
     high            NUMERIC(12,4),
@@ -48,7 +49,8 @@ CREATE TABLE IF NOT EXISTS market.daily (
     -- 限价标记
     is_st           BOOLEAN      DEFAULT FALSE,
     is_suspended    BOOLEAN      DEFAULT FALSE,
-    PRIMARY KEY (time, symbol)
+    data_source     VARCHAR(32)  NOT NULL DEFAULT 'tushare',
+    PRIMARY KEY (time, asset_type, symbol)
 );
 
 -- 转换为 TimescaleDB 超表（按月分区）
@@ -62,7 +64,7 @@ SELECT create_hypertable(
 -- 压缩策略：90天前的数据自动压缩
 ALTER TABLE market.daily SET (
     timescaledb.compress,
-    timescaledb.compress_segmentby = 'symbol',
+    timescaledb.compress_segmentby = 'asset_type, symbol',
     timescaledb.compress_orderby = 'time DESC'
 );
 SELECT add_compression_policy('market.daily', INTERVAL '90 days', if_not_exists => TRUE);
@@ -129,10 +131,11 @@ SELECT create_hypertable(
 -- ════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS factors.daily_factors (
     time            TIMESTAMPTZ  NOT NULL,
+    asset_type      VARCHAR(32)  NOT NULL DEFAULT 'stock_CN',
     symbol          VARCHAR(10)  NOT NULL,
     factor_name     VARCHAR(50)  NOT NULL,
     factor_value    DOUBLE PRECISION,
-    PRIMARY KEY (time, symbol, factor_name)
+    PRIMARY KEY (time, asset_type, symbol, factor_name)
 );
 
 SELECT create_hypertable(
@@ -144,7 +147,7 @@ SELECT create_hypertable(
 
 ALTER TABLE factors.daily_factors SET (
     timescaledb.compress,
-    timescaledb.compress_segmentby = 'symbol, factor_name',
+    timescaledb.compress_segmentby = 'asset_type, symbol, factor_name',
     timescaledb.compress_orderby = 'time DESC'
 );
 SELECT add_compression_policy('factors.daily_factors', INTERVAL '60 days', if_not_exists => TRUE);
@@ -154,12 +157,13 @@ SELECT add_compression_policy('factors.daily_factors', INTERVAL '60 days', if_no
 -- ════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS signals.trading_signals (
     time            TIMESTAMPTZ  NOT NULL,
+    asset_type      VARCHAR(32)  NOT NULL DEFAULT 'stock_CN',
     symbol          VARCHAR(10)  NOT NULL,
     strategy        VARCHAR(50)  NOT NULL,
     signal          SMALLINT     NOT NULL,  -- 1:买 | -1:卖 | 0:持有
     score           DOUBLE PRECISION,       -- 信号强度
     metadata        JSONB,                  -- 策略附加信息
-    PRIMARY KEY (time, symbol, strategy)
+    PRIMARY KEY (time, asset_type, symbol, strategy)
 );
 
 SELECT create_hypertable(
@@ -175,22 +179,24 @@ SELECT create_hypertable(
 CREATE TABLE IF NOT EXISTS meta.sync_status (
     id              SERIAL       PRIMARY KEY,
     data_type       VARCHAR(50)  NOT NULL,   -- daily | minute | index 等
+    asset_type      VARCHAR(32),
     symbol          VARCHAR(10),             -- NULL 表示全市场任务
+    data_source     VARCHAR(32),
     last_sync_time  TIMESTAMPTZ,
     last_date       DATE,
     status          VARCHAR(20)  DEFAULT 'pending',  -- pending|running|success|failed
     error_msg       TEXT,
     updated_at      TIMESTAMPTZ  DEFAULT NOW(),
-    UNIQUE (data_type, symbol)
+    UNIQUE (data_type, asset_type, symbol, data_source)
 );
 
 -- ════════════════════════════════════════════════════════════
 -- 索引
 -- ════════════════════════════════════════════════════════════
-CREATE INDEX IF NOT EXISTS idx_daily_symbol     ON market.daily (symbol, time DESC);
-CREATE INDEX IF NOT EXISTS idx_minute_symbol    ON market.minute (symbol, freq, time DESC);
-CREATE INDEX IF NOT EXISTS idx_factors_name     ON factors.daily_factors (factor_name, time DESC);
-CREATE INDEX IF NOT EXISTS idx_signals_strategy ON signals.trading_signals (strategy, time DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_asset_symbol     ON market.daily (asset_type, symbol, time DESC);
+CREATE INDEX IF NOT EXISTS idx_minute_symbol          ON market.minute (symbol, freq, time DESC);
+CREATE INDEX IF NOT EXISTS idx_factors_asset_name     ON factors.daily_factors (asset_type, factor_name, time DESC);
+CREATE INDEX IF NOT EXISTS idx_signals_asset_strategy ON signals.trading_signals (asset_type, strategy, time DESC);
 CREATE INDEX IF NOT EXISTS idx_stocks_exchange  ON meta.stocks (exchange);
 CREATE INDEX IF NOT EXISTS idx_stocks_active    ON meta.stocks (is_active) WHERE is_active = TRUE;
 
@@ -201,6 +207,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS market.weekly
 WITH (timescaledb.continuous) AS
 SELECT
     time_bucket('1 week', time)  AS time,
+    asset_type,
     symbol,
     first(open,  time)           AS open,
     max(high)                    AS high,
@@ -209,7 +216,7 @@ SELECT
     sum(volume)                  AS volume,
     sum(amount)                  AS amount
 FROM market.daily
-GROUP BY 1, 2
+GROUP BY 1, 2, 3
 WITH NO DATA;
 
 -- 刷新策略：每天刷新最近3周数据（窗口需覆盖至少2个桶：2×1week + end_offset）
@@ -225,6 +232,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS market.monthly
 WITH (timescaledb.continuous) AS
 SELECT
     time_bucket('1 month', time) AS time,
+    asset_type,
     symbol,
     first(open,  time)           AS open,
     max(high)                    AS high,
@@ -233,7 +241,7 @@ SELECT
     sum(volume)                  AS volume,
     sum(amount)                  AS amount
 FROM market.daily
-GROUP BY 1, 2
+GROUP BY 1, 2, 3
 WITH NO DATA;
 
 SELECT add_continuous_aggregate_policy(

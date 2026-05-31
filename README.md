@@ -111,7 +111,7 @@ The pipeline:
 External callers should use:
 
 ```bash
-docker compose exec app python cli_api/query_factors.py --symbol 603019.SH --date 2026-04-30
+docker compose exec app python api/cli/query_factors.py --symbol 603019.SH --date 2026-04-30
 ```
 
 This is a CLI-style query interface over the factor query service.
@@ -210,15 +210,15 @@ docker compose exec app python scripts/factor_daily.py --factors rsi14,limit_up
 ### Query factor values
 
 ```bash
-docker compose exec app python cli_api/query_factors.py --symbol 603019.SH --date 2026-04-30
-docker compose exec app python cli_api/query_factors.py --symbol "603019.SH 300059.SZ" --date 2026-04-30 --format json
+docker compose exec app python api/cli/query_factors.py --symbol 603019.SH --date 2026-04-30
+docker compose exec app python api/cli/query_factors.py --symbol "603019.SH 300059.SZ" --date 2026-04-30 --format json
 ```
 
 ### Query composite signal scores
 
 ```bash
-docker compose exec app python cli_api/query_signal_scores.py --date 2026-05-15 --symbol 000988.SZ --symbol 600126.SH --format json
-docker compose exec app python cli_api/query_signal_scores.py --date 2026-05-15 --format csv
+docker compose exec app python api/cli/query_signal_scores.py --date 2026-05-15 --symbol 000988.SZ --symbol 600126.SH --format json
+docker compose exec app python api/cli/query_signal_scores.py --date 2026-05-15 --format csv
 ```
 
 ## Notebook entrypoints
@@ -235,13 +235,15 @@ After JupyterLab is up, start with:
 ```text
 .
 ├── app/
-│   ├── data_pipeline/        # market data ingestion helpers
+│   ├── data_loader/          # provider-based market data loaders
 │   ├── factors/              # factor definitions and pipeline logic
 │   ├── services/             # factor query / backfill services
 │   ├── strategy/             # strategy prototypes
 │   ├── backtest/             # backtest scaffolding
 │   └── utils/                # DB, Qlib, signal helpers
 ├── config/
+│   ├── asset_types.csv
+│   ├── universes/
 │   └── strategies/
 ├── docker/
 │   ├── grafana/
@@ -275,15 +277,22 @@ docker compose down -v
 docker compose up -d
 ```
 
-### Stock pool config
+### Asset-type config
 
-The market ETL expects a local `config/stock_pool.csv` file. This file is intentionally ignored by Git in this repo, so create your own with at least:
+ETL 和 factor 现在默认读取两层配置：
 
-```text
-symbol,name
-603019.SH,Stock A
-300059.SZ,Stock B
-```
+- `config/asset_types.csv`: `asset_type` 注册表
+- `config/universes/{asset_type}.csv`: 对应资产域的 pipeline universe
+
+默认行为：
+
+- 不传 `--asset-type` 时，遍历 `asset_types.csv` 中 `enabled=true` 的全部资产域
+- 每个资产域只读取注册表中指定的 `pipeline_universe`
+
+旧的 `stock_pool` / `data_pipeline` 兼容入口已移除，调用方应直接使用：
+
+- `app/services/asset_universe.py`
+- `app/data_loader/*`
 
 ## Testing
 

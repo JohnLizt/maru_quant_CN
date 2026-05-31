@@ -22,6 +22,10 @@ env/
 data/
 *.parquet
 *.csv
+!config/asset_types.csv
+!config/universes/
+config/universes/*.csv
+!config/universes/*.template.csv
 *.h5
 *.hdf5
 

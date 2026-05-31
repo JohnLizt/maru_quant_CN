@@ -73,6 +73,9 @@ class BaseFactor(ABC):
     def _to_long(self, df: pl.DataFrame, value_col: str) -> pl.DataFrame:
         """将宽格式因子列转为 factors.daily_factors 所需的长格式"""
         df = self._apply_suspended_policy(df, value_col)
-        return df.select(["time", "symbol", value_col]).rename(
-            {value_col: "factor_value"}
-        ).with_columns(pl.lit(self.name).alias("factor_name"))
+        columns = ["time", "symbol", value_col]
+        if "asset_type" in df.columns:
+            columns.insert(1, "asset_type")
+        return df.select(columns).rename({value_col: "factor_value"}).with_columns(
+            pl.lit(self.name).alias("factor_name")
+        )

@@ -28,12 +28,13 @@ class ValidationResult:
     issues: list[ValidationIssue]
 
 
-def _expected_counts(engine, start: str, end: str, symbols: list[str], suspended_policy: str) -> dict[str, int]:
+def _expected_counts(engine, asset_type: str, start: str, end: str, symbols: list[str], suspended_policy: str) -> dict[str, int]:
     sql = """
         SELECT TO_CHAR(time AT TIME ZONE 'UTC', 'YYYYMMDD') AS trade_date,
                COUNT(DISTINCT symbol) AS symbol_count
         FROM market.daily
-        WHERE time >= :start AND time <= :end
+        WHERE asset_type = :asset_type
+          AND time >= :start AND time <= :end
           AND symbol = ANY(:symbols)
     """
     if suspended_policy == "mask":
@@ -41,36 +42,48 @@ def _expected_counts(engine, start: str, end: str, symbols: list[str], suspended
     sql += " GROUP BY trade_date"
 
     with engine.connect() as conn:
-        rows = conn.execute(text(sql), {
-            "start": _iso(start),
-            "end": _iso(end),
-            "symbols": symbols,
-        }).fetchall()
+        rows = conn.execute(
+            text(sql),
+            {
+                "asset_type": asset_type,
+                "start": _iso(start),
+                "end": _iso(end),
+                "symbols": symbols,
+            },
+        ).fetchall()
     return {r[0]: int(r[1]) for r in rows}
 
 
-def _actual_counts(engine, start: str, end: str, symbols: list[str], factor_names: list[str]) -> dict[tuple[str, str], int]:
+def _actual_counts(engine, asset_type: str, start: str, end: str, symbols: list[str], factor_names: list[str]) -> dict[tuple[str, str], int]:
     with engine.connect() as conn:
-        rows = conn.execute(text("""
-            SELECT TO_CHAR(time AT TIME ZONE 'UTC', 'YYYYMMDD') AS trade_date,
-                   factor_name,
-                   COUNT(DISTINCT symbol) AS symbol_count
-            FROM factors.daily_factors
-            WHERE time >= :start AND time <= :end
-              AND symbol = ANY(:symbols)
-              AND factor_name = ANY(:factor_names)
-            GROUP BY trade_date, factor_name
-        """), {
-            "start": _iso(start),
-            "end": _iso(end),
-            "symbols": symbols,
-            "factor_names": factor_names,
-        }).fetchall()
+        rows = conn.execute(
+            text(
+                """
+                SELECT TO_CHAR(time AT TIME ZONE 'UTC', 'YYYYMMDD') AS trade_date,
+                       factor_name,
+                       COUNT(DISTINCT symbol) AS symbol_count
+                FROM factors.daily_factors
+                WHERE asset_type = :asset_type
+                  AND time >= :start AND time <= :end
+                  AND symbol = ANY(:symbols)
+                  AND factor_name = ANY(:factor_names)
+                GROUP BY trade_date, factor_name
+                """
+            ),
+            {
+                "asset_type": asset_type,
+                "start": _iso(start),
+                "end": _iso(end),
+                "symbols": symbols,
+                "factor_names": factor_names,
+            },
+        ).fetchall()
     return {(r[0], r[1]): int(r[2]) for r in rows}
 
 
 def validate_factor_completeness(
     engine,
+    asset_type: str,
     target_dates: list[str],
     symbols: list[str],
     factors: list[BaseFactor],
@@ -80,10 +93,10 @@ def validate_factor_completeness(
         return ValidationResult(ok=True, issues=[])
 
     start, end = target_dates[0], target_dates[-1]
-    actual_counts = _actual_counts(engine, start, end, symbols, [factor.name for factor in factors])
+    actual_counts = _actual_counts(engine, asset_type, start, end, symbols, [factor.name for factor in factors])
 
     expected_by_policy = {
-        policy: _expected_counts(engine, start, end, symbols, policy)
+        policy: _expected_counts(engine, asset_type, start, end, symbols, policy)
         for policy in {factor.suspended_policy for factor in factors}
     }
 
@@ -93,18 +106,20 @@ def validate_factor_completeness(
             expected = expected_by_policy[factor.suspended_policy].get(trade_date, 0)
             actual = actual_counts.get((trade_date, factor.name), 0)
             if actual != expected:
-                issues.append(ValidationIssue(
-                    trade_date=trade_date,
-                    factor_name=factor.name,
-                    expected_count=expected,
-                    actual_count=actual,
-                ))
+                issues.append(
+                    ValidationIssue(
+                        trade_date=trade_date,
+                        factor_name=factor.name,
+                        expected_count=expected,
+                        actual_count=actual,
+                    )
+                )
 
     return ValidationResult(ok=not issues, issues=issues)
 
 
-def get_complete_factor_dates(engine, target_dates: list[str], symbols: list[str], factors: list[BaseFactor]) -> set[str]:
+def get_complete_factor_dates(engine, asset_type: str, target_dates: list[str], symbols: list[str], factors: list[BaseFactor]) -> set[str]:
     """返回在指定因子集合下已完整覆盖的交易日。"""
-    result = validate_factor_completeness(engine, target_dates, symbols, factors)
+    result = validate_factor_completeness(engine, asset_type, target_dates, symbols, factors)
     incomplete_dates = {issue.trade_date for issue in result.issues}
     return {trade_date for trade_date in target_dates if trade_date not in incomplete_dates}

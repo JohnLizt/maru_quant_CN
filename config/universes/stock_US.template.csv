@@ -1,0 +1,4 @@
+symbol,name,is_active
+AAPL,Apple,true
+MSFT,Microsoft,true
+NVDA,NVIDIA,true
