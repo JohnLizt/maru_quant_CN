@@ -38,6 +38,8 @@ def _expand_symbols(raw_symbols: list[str]) -> list[str]:
 
 def _build_json_payload(
     profile_name: str,
+    signal_mode: str,
+    factor_names: list[str],
     normalization_scope: str,
     asset_type: str,
     top_n: int | None,
@@ -52,23 +54,18 @@ def _build_json_payload(
             "symbol": row["symbol"],
             "symbol_name": row["symbol_name"],
             "tag": row.get("tag", ""),
-            "raw_factors": {
-                "ma_cross": row["ma_cross"],
-                "price_to_ma20": row["price_to_ma20"],
-                "rsi14": row["rsi14"],
-            },
-            "normalized_factors": {
-                "ma_cross": row["ma_cross_score"],
-                "price_to_ma20": row["price_to_ma20_score"],
-                "rsi14": row["rsi14_score"],
-            },
+            "signal_mode": row.get("signal_mode"),
+            "raw_factors": {factor_name: row[factor_name] for factor_name in factor_names},
+            "normalized_factors": {factor_name: row[f"{factor_name}_score"] for factor_name in factor_names},
             "composite_score": row["composite_score"],
             "label": row["label"],
             "contributors": row["contributors"],
+            "rank": row.get("rank"),
         })
 
     query: dict[str, str | None] = {
         "profile": profile_name,
+        "signal_mode": signal_mode,
         "asset_type": asset_type,
         "normalization_scope": normalization_scope,
         "start_date": start_date,
@@ -86,6 +83,7 @@ def _build_json_payload(
 
 
 def _print_result(
+    profile,
     df: pl.DataFrame,
     output_format: str,
     *,
@@ -97,7 +95,17 @@ def _print_result(
     end_date: str | None,
 ) -> None:
     if output_format == "json":
-        payload = _build_json_payload(profile_name, normalization_scope, asset_type, top_n, df, start_date, end_date)
+        payload = _build_json_payload(
+            profile_name,
+            profile.signal_mode,
+            profile.factor_names,
+            normalization_scope,
+            asset_type,
+            top_n,
+            df,
+            start_date,
+            end_date,
+        )
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return
 
@@ -145,6 +153,7 @@ def main(
         logger.warning("未查询到信号评分数据")
     else:
         _print_result(
+            profile,
             df,
             output_format,
             profile_name=profile.name,

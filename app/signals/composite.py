@@ -8,30 +8,39 @@ import polars as pl
 from app.signals.profiles import SignalProfile
 
 
-def _build_contributors(row: dict[str, Any]) -> list[str]:
+def _build_contributors(row: dict[str, Any], profile: SignalProfile) -> list[str]:
     contributors: list[str] = []
 
-    ma_cross_score = float(row.get("ma_cross_score") or 0.0)
-    price_score = float(row.get("price_to_ma20_score") or 0.0)
-    rsi_score = float(row.get("rsi14_score") or 0.0)
-    raw_rsi = float(row.get("rsi14") or 0.0)
+    if "ma_cross" in profile.factor_names:
+        ma_cross_score = float(row.get("ma_cross_score") or 0.0)
+        if ma_cross_score >= 0.5:
+            contributors.append("trend_structure_strong")
+        elif ma_cross_score <= -0.5:
+            contributors.append("trend_structure_weak")
 
-    if ma_cross_score >= 0.5:
-        contributors.append("trend_structure_strong")
-    elif ma_cross_score <= -0.5:
-        contributors.append("trend_structure_weak")
+    if "price_to_ma20" in profile.factor_names:
+        price_score = float(row.get("price_to_ma20_score") or 0.0)
+        if price_score >= 0.5:
+            contributors.append("price_above_ma20")
+        elif price_score <= -0.5:
+            contributors.append("price_below_ma20")
 
-    if price_score >= 0.5:
-        contributors.append("price_above_ma20")
-    elif price_score <= -0.5:
-        contributors.append("price_below_ma20")
+    if "rsi14" in profile.factor_names:
+        rsi_score = float(row.get("rsi14_score") or 0.0)
+        raw_rsi = float(row.get("rsi14") or 0.0)
+        if rsi_score >= 0.5:
+            contributors.append("rsi_in_healthy_trend_zone")
+        elif raw_rsi > 85.0:
+            contributors.append("rsi_overheated")
+        elif raw_rsi < 35.0:
+            contributors.append("rsi_weak")
 
-    if rsi_score >= 0.5:
-        contributors.append("rsi_in_healthy_trend_zone")
-    elif raw_rsi > 85.0:
-        contributors.append("rsi_overheated")
-    elif raw_rsi < 35.0:
-        contributors.append("rsi_weak")
+    if "macd_norm" in profile.factor_names:
+        macd_score = float(row.get("macd_norm_score") or 0.0)
+        if macd_score >= 0.5:
+            contributors.append("macd_momentum_strong")
+        elif macd_score <= -0.5:
+            contributors.append("macd_momentum_weak")
 
     if not contributors:
         contributors.append("mixed_signal")
@@ -39,15 +48,15 @@ def _build_contributors(row: dict[str, Any]) -> list[str]:
     return contributors
 
 
-def _label_expr(score_column: str = "composite_score") -> pl.Expr:
+def _label_expr(profile: SignalProfile, score_column: str = "composite_score") -> pl.Expr:
     return (
-        pl.when(pl.col(score_column) >= 0.6)
+        pl.when(pl.col(score_column) >= profile.strong_threshold)
         .then(pl.lit("strong"))
-        .when(pl.col(score_column) >= 0.2)
+        .when(pl.col(score_column) >= profile.positive_threshold)
         .then(pl.lit("positive"))
-        .when(pl.col(score_column) > -0.2)
+        .when(pl.col(score_column) > profile.neutral_lower_threshold)
         .then(pl.lit("neutral"))
-        .when(pl.col(score_column) > -0.6)
+        .when(pl.col(score_column) > profile.weak_threshold)
         .then(pl.lit("weak"))
         .otherwise(pl.lit("very_weak"))
         .alias("label")
@@ -66,10 +75,10 @@ def apply_composite_score(df: pl.DataFrame, profile: SignalProfile) -> pl.DataFr
 
     return (
         df.with_columns((weighted_sum / weight_sum).alias("composite_score"))
-        .with_columns(_label_expr())
+        .with_columns(_label_expr(profile))
         .with_columns(
             pl.struct([*profile.factor_names, *required_score_columns])
-            .map_elements(_build_contributors, return_dtype=pl.List(pl.Utf8))
+            .map_elements(lambda row: _build_contributors(row, profile), return_dtype=pl.List(pl.Utf8))
             .alias("contributors")
         )
     )

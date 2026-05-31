@@ -33,9 +33,9 @@ def compute_metrics(returns: pl.Series, freq: str = "daily") -> dict:
     calmar = ann_return / abs(max_dd) if max_dd != 0 else 0.0
 
     return {
-        "annualized_return": round(ann_return, 4),
-        "annualized_vol": round(ann_vol, 4),
-        "sharpe": round(sharpe, 4),
-        "max_drawdown": round(max_dd, 4),
-        "calmar": round(calmar, 4),
+        "annualized_return": float(round(ann_return, 4)),
+        "annualized_vol": float(round(ann_vol, 4)),
+        "sharpe": float(round(sharpe, 4)),
+        "max_drawdown": float(round(max_dd, 4)),
+        "calmar": float(round(calmar, 4)),
     }

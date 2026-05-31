@@ -1,38 +1,88 @@
-"""
-策略基类
-所有策略继承 BaseStrategy，实现 generate_signals() 方法
-"""
+"""Strategy base contracts shared by app-facing snapshots and backtests."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import date
+from typing import Literal
 
 import polars as pl
 
 
+SignalMode = Literal["cross_sectional", "time_series"]
+DecisionType = Literal["target_weight", "entry_exit_signal"]
+
+STRATEGY_DECISION_SCHEMA: dict[str, pl.DataType] = {
+    "time": pl.Datetime("us", "UTC"),
+    "asset_type": pl.Utf8,
+    "strategy": pl.Utf8,
+    "strategy_mode": pl.Utf8,
+    "symbol": pl.Utf8,
+    "decision_type": pl.Utf8,
+    "signal": pl.Int64,
+    "target_weight": pl.Float64,
+    "score": pl.Float64,
+    "rank": pl.UInt32,
+    "tag": pl.Utf8,
+    "metadata": pl.Utf8,
+}
+
+
 class BaseStrategy(ABC):
-    """
-    策略基类
+    """Base strategy that consumes signal snapshots and emits decision tables."""
 
-    子类须实现 generate_signals()，读取因子数据并产生交易信号。
-    信号值约定：1 = 买入，-1 = 卖出，0 = 持有
-    """
+    strategy_name: str
+    strategy_mode: SignalMode
+    supported_signal_modes: tuple[SignalMode, ...]
+    supported_asset_types: tuple[str, ...]
 
-    name: str  # 策略唯一标识，写入 signals.trading_signals.strategy
+    def empty_decisions(self) -> pl.DataFrame:
+        return pl.DataFrame(schema=STRATEGY_DECISION_SCHEMA)
+
+    def validate_signal_snapshot(self, signal_snapshot: pl.DataFrame) -> None:
+        if signal_snapshot.is_empty():
+            return
+
+        required_columns = {"time", "asset_type", "signal_mode", "symbol", "composite_score"}
+        missing_columns = required_columns - set(signal_snapshot.columns)
+        if missing_columns:
+            raise ValueError(f"signal snapshot 缺少列: {sorted(missing_columns)}")
+
+        snapshot_modes = {
+            str(value)
+            for value in signal_snapshot.get_column("signal_mode").drop_nulls().unique().to_list()
+        }
+        unsupported_modes = snapshot_modes - set(self.supported_signal_modes)
+        if unsupported_modes:
+            raise ValueError(
+                f"strategy={self.strategy_name} 不支持 signal_mode={sorted(unsupported_modes)}"
+            )
+
+        asset_types = {
+            str(value)
+            for value in signal_snapshot.get_column("asset_type").drop_nulls().unique().to_list()
+        }
+        unsupported_assets = asset_types - set(self.supported_asset_types)
+        if unsupported_assets:
+            raise ValueError(
+                f"strategy={self.strategy_name} 不支持 asset_type={sorted(unsupported_assets)}"
+            )
 
     @abstractmethod
+    def build_decisions(
+        self,
+        signal_snapshot: pl.DataFrame,
+        as_of_date: date | None = None,
+    ) -> pl.DataFrame:
+        """Build strategy decisions from a signal snapshot."""
+
     def generate_signals(
         self,
-        factors: pl.DataFrame,
+        signal_snapshot: pl.DataFrame,
         universe: list[str] | None = None,
     ) -> pl.DataFrame:
-        """
-        根据因子数据生成交易信号
+        """Backward-compatible alias used by older callers/tests."""
 
-        Args:
-            factors: 长格式因子 DataFrame (time, symbol, factor_name, factor_value)
-            universe: 股票池，None 表示全部
-
-        Returns:
-            DataFrame，列：time, symbol, strategy, signal, score, metadata
-        """
-        ...
+        decisions = self.build_decisions(signal_snapshot)
+        if universe:
+            decisions = decisions.filter(pl.col("symbol").is_in(universe))
+        return decisions

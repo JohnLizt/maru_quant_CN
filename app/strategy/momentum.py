@@ -20,25 +20,30 @@ class MomentumStrategy(BaseStrategy):
     - 其余持有 (0)
     """
 
-    name = "momentum_v1"
+    strategy_name = "momentum_v1"
+    strategy_mode = "time_series"
+    supported_signal_modes = ("time_series",)
+    supported_asset_types = ("stock_CN",)
 
     def __init__(self, rsi_overbought: float = 70.0, rsi_oversold: float = 30.0):
         self.rsi_overbought = rsi_overbought
         self.rsi_oversold = rsi_oversold
+
+    def build_decisions(
+        self,
+        signal_snapshot: pl.DataFrame,
+        as_of_date=None,
+    ) -> pl.DataFrame:
+        _ = as_of_date
+        raise NotImplementedError("MomentumStrategy 尚未迁移到新的 signal snapshot 接口")
 
     def generate_signals(
         self,
         factors: pl.DataFrame,
         universe: list[str] | None = None,
     ) -> pl.DataFrame:
-        """
-        Args:
-            factors: 长格式 DataFrame (time, symbol, factor_name, factor_value)
-            universe: 股票池过滤
+        """Legacy factor-based implementation retained for future migration."""
 
-        Returns:
-            DataFrame 列：time, symbol, strategy, signal, score, metadata
-        """
         if universe:
             factors = factors.filter(pl.col("symbol").is_in(universe))
 
@@ -79,7 +84,7 @@ class MomentumStrategy(BaseStrategy):
                 .alias("signal")
             )
             .with_columns([
-                pl.lit(self.name).alias("strategy"),
+                pl.lit(self.strategy_name).alias("strategy"),
                 (pl.col("ma20") - pl.col("ma60")).alias("score"),
                 pl.lit(None).cast(pl.Utf8).alias("metadata"),
             ])
@@ -87,7 +92,7 @@ class MomentumStrategy(BaseStrategy):
         )
 
         logger.info(
-            f"[{self.name}] 生成信号 {len(signals)} 条，"
+            f"[{self.strategy_name}] 生成信号 {len(signals)} 条，"
             f"买入={signals.filter(pl.col('signal')==1).height}，"
             f"卖出={signals.filter(pl.col('signal')==-1).height}"
         )

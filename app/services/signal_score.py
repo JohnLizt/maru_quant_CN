@@ -11,6 +11,7 @@ from app.services.asset_universe import (
     get_pipeline_symbol_name_map,
     get_pipeline_symbol_tag_map,
     normalize_symbol,
+    resolve_pipeline_symbols,
 )
 from app.signals.composite import apply_composite_score
 from app.signals.normalization import apply_signal_profile
@@ -18,21 +19,17 @@ from app.signals.profiles import SignalProfile, get_signal_profile
 from app.utils.db import get_engine
 
 
-SIGNAL_SCORE_SCHEMA: dict[str, pl.DataType] = {
+BASE_SIGNAL_SCHEMA: dict[str, pl.DataType] = {
     "time": pl.Datetime("us", "UTC"),
     "asset_type": pl.Utf8,
+    "signal_mode": pl.Utf8,
     "symbol": pl.Utf8,
     "symbol_name": pl.Utf8,
     "tag": pl.Utf8,
-    "ma_cross": pl.Float64,
-    "price_to_ma20": pl.Float64,
-    "rsi14": pl.Float64,
-    "ma_cross_score": pl.Float64,
-    "price_to_ma20_score": pl.Float64,
-    "rsi14_score": pl.Float64,
     "composite_score": pl.Float64,
     "label": pl.Utf8,
     "contributors": pl.List(pl.Utf8),
+    "rank": pl.UInt32,
 }
 
 
@@ -77,8 +74,24 @@ def _normalize_symbols(symbols: list[str] | None) -> list[str]:
     return normalized
 
 
-def _empty_result() -> pl.DataFrame:
-    return pl.DataFrame(schema=SIGNAL_SCORE_SCHEMA)
+def _result_schema(profile: SignalProfile) -> dict[str, pl.DataType]:
+    schema = dict(BASE_SIGNAL_SCHEMA)
+    for factor_name in profile.factor_names:
+        schema[factor_name] = pl.Float64
+        schema[f"{factor_name}_score"] = pl.Float64
+    ordered_keys = ["time", "asset_type", "signal_mode", "symbol", "symbol_name", "tag", *profile.factor_names, *[f"{name}_score" for name in profile.factor_names], "composite_score", "label", "contributors", "rank"]
+    return {key: schema[key] for key in ordered_keys}
+
+
+def _empty_result(profile: SignalProfile) -> pl.DataFrame:
+    return pl.DataFrame(schema=_result_schema(profile))
+
+
+def _validate_profile_asset_type(profile: SignalProfile, asset_type: str) -> None:
+    if asset_type not in profile.supported_asset_types:
+        raise ValueError(
+            f"profile={profile.name} 不支持 asset_type={asset_type}，可用: {list(profile.supported_asset_types)}"
+        )
 
 
 def _query_universe_factors(profile: SignalProfile, asset_type: str, start: date, end: date) -> pl.DataFrame:
@@ -146,6 +159,84 @@ def _attach_symbol_names(df: pl.DataFrame, asset_type: str) -> pl.DataFrame:
     )
 
 
+def _filter_to_pipeline_universe(df: pl.DataFrame, asset_type: str) -> pl.DataFrame:
+    universe_symbols = resolve_pipeline_symbols(asset_type)
+    return df.filter(pl.col("symbol").is_in(universe_symbols))
+
+
+def build_signal_snapshot(
+    symbols: list[str] | None = None,
+    start_date: str | date | datetime | None = None,
+    end_date: str | date | datetime | None = None,
+    *,
+    asset_type: str = "stock_CN",
+    profile_name: str = "trend_v1",
+) -> tuple[SignalProfile, pl.DataFrame]:
+    """Return full-universe signal ranking table for the requested profile."""
+
+    profile = get_signal_profile(profile_name)
+    _validate_profile_asset_type(profile, asset_type)
+    normalized_symbols = _normalize_symbols(symbols)
+    start, end = _normalize_date_range(start_date, end_date)
+
+    raw_factors = _query_universe_factors(profile, asset_type, start, end)
+    if raw_factors.is_empty():
+        return profile, _empty_result(profile)
+
+    scored = (
+        raw_factors
+        .pipe(_pivot_factors, profile=profile)
+        .pipe(_filter_to_pipeline_universe, asset_type=asset_type)
+        .pipe(apply_signal_profile, profile=profile)
+        .pipe(apply_composite_score, profile=profile)
+        .pipe(_attach_symbol_names, asset_type=asset_type)
+        .with_columns(pl.lit(profile.signal_mode).alias("signal_mode"))
+        .with_columns(pl.col("composite_score").rank(method="ordinal", descending=True).over("time").cast(pl.UInt32).alias("rank"))
+        .select([
+            "time",
+            "asset_type",
+            "signal_mode",
+            "symbol",
+            "symbol_name",
+            "tag",
+            *profile.factor_names,
+            *[f"{factor_name}_score" for factor_name in profile.factor_names],
+            "composite_score",
+            "label",
+            "contributors",
+            "rank",
+        ])
+        .sort(["time", "composite_score", "symbol"], descending=[False, True, False])
+    )
+
+    if normalized_symbols:
+        scored = scored.filter(pl.col("symbol").is_in(normalized_symbols))
+
+    if scored.is_empty():
+        return profile, _empty_result(profile)
+
+    return profile, scored.cast(_result_schema(profile))
+
+
+def query_signal_rankings(
+    symbols: list[str] | None = None,
+    start_date: str | date | datetime | None = None,
+    end_date: str | date | datetime | None = None,
+    *,
+    asset_type: str = "stock_CN",
+    profile_name: str = "trend_v1",
+) -> tuple[SignalProfile, pl.DataFrame]:
+    """Backward-compatible alias for build_signal_snapshot."""
+
+    return build_signal_snapshot(
+        symbols,
+        start_date,
+        end_date,
+        asset_type=asset_type,
+        profile_name=profile_name,
+    )
+
+
 def query_signal_scores(
     symbols: list[str] | None = None,
     start_date: str | date | datetime | None = None,
@@ -157,50 +248,20 @@ def query_signal_scores(
 ) -> tuple[SignalProfile, pl.DataFrame]:
     """Query composite signal scores over the full factor universe."""
 
-    profile = get_signal_profile(profile_name)
-    normalized_symbols = _normalize_symbols(symbols)
-    start, end = _normalize_date_range(start_date, end_date)
-
-    raw_factors = _query_universe_factors(profile, asset_type, start, end)
-    if raw_factors.is_empty():
-        return profile, _empty_result()
-
-    scored = (
-        raw_factors
-        .pipe(_pivot_factors, profile=profile)
-        .pipe(apply_signal_profile, profile=profile)
-        .pipe(apply_composite_score, profile=profile)
-        .pipe(_attach_symbol_names, asset_type=asset_type)
-        .select([
-            "time",
-            "asset_type",
-            "symbol",
-            "symbol_name",
-            "tag",
-            *profile.factor_names,
-            *[f"{factor_name}_score" for factor_name in profile.factor_names],
-            "composite_score",
-            "label",
-            "contributors",
-        ])
-        .sort(["time", "composite_score", "symbol"], descending=[False, True, False])
+    profile, scored = build_signal_snapshot(
+        symbols,
+        start_date,
+        end_date,
+        asset_type=asset_type,
+        profile_name=profile_name,
     )
 
-    if normalized_symbols:
-        scored = scored.filter(pl.col("symbol").is_in(normalized_symbols))
-
     if scored.is_empty():
-        return profile, _empty_result()
+        return profile, scored
 
     if top_n is not None:
         if top_n <= 0:
             raise ValueError("top_n 必须大于 0")
-        scored = (
-            scored
-            .with_columns(pl.col("composite_score").rank(method="ordinal", descending=True).over("time").alias("_rank"))
-            .filter(pl.col("_rank") <= top_n)
-            .drop("_rank")
-            .sort(["time", "composite_score", "symbol"], descending=[False, True, False])
-        )
+        scored = scored.filter(pl.col("rank") <= top_n).sort(["time", "composite_score", "symbol"], descending=[False, True, False])
 
-    return profile, scored.cast(SIGNAL_SCORE_SCHEMA)
+    return profile, scored

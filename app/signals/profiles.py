@@ -6,6 +6,7 @@ from typing import Literal
 
 
 NormalizationMethod = Literal["linear_clip", "rank_to_unit", "piecewise"]
+SignalMode = Literal["cross_sectional", "time_series"]
 
 
 @dataclass(frozen=True)
@@ -38,8 +39,14 @@ class SignalProfile:
     """Composite scoring profile."""
 
     name: str
+    signal_mode: SignalMode
     normalization_scope: str
     factor_rules: tuple[FactorScoreRule, ...]
+    supported_asset_types: tuple[str, ...] = ("stock_CN",)
+    strong_threshold: float = 0.6
+    positive_threshold: float = 0.2
+    neutral_lower_threshold: float = -0.2
+    weak_threshold: float = -0.6
 
     @property
     def factor_names(self) -> list[str]:
@@ -48,7 +55,9 @@ class SignalProfile:
 
 TREND_V1_PROFILE = SignalProfile(
     name="trend_v1",
+    signal_mode="cross_sectional",
     normalization_scope="full_universe",
+    supported_asset_types=("stock_CN",),
     factor_rules=(
         FactorScoreRule(
             factor_name="ma_cross",
@@ -81,8 +90,57 @@ TREND_V1_PROFILE = SignalProfile(
 )
 
 
+TREND_ETF_V1_PROFILE = SignalProfile(
+    name="trend_etf_v1",
+    signal_mode="cross_sectional",
+    normalization_scope="full_universe",
+    supported_asset_types=("etf_CN",),
+    factor_rules=(
+        FactorScoreRule(
+            factor_name="rsi14",
+            method="piecewise",
+            weight=0.4633,
+            higher_better=True,
+            left_score=-0.8,
+            right_score=0.2,
+            segments=(
+                PiecewiseSegment(start=40.0, end=52.0, start_score=-0.2, end_score=0.4),
+                PiecewiseSegment(start=52.0, end=68.0, start_score=0.4, end_score=1.0),
+                PiecewiseSegment(start=68.0, end=82.0, start_score=1.0, end_score=0.2),
+            ),
+        ),
+        FactorScoreRule(
+            factor_name="price_to_ma20",
+            method="linear_clip",
+            weight=0.3314,
+            clip_lower=-0.08,
+            clip_upper=0.10,
+        ),
+        FactorScoreRule(
+            factor_name="macd_norm",
+            method="linear_clip",
+            weight=0.1606,
+            clip_lower=-0.03,
+            clip_upper=0.03,
+        ),
+        FactorScoreRule(
+            factor_name="ma_cross",
+            method="linear_clip",
+            weight=0.0447,
+            clip_lower=-0.10,
+            clip_upper=0.10,
+        ),
+    ),
+    strong_threshold=0.5,
+    positive_threshold=0.15,
+    neutral_lower_threshold=-0.15,
+    weak_threshold=-0.5,
+)
+
+
 SIGNAL_PROFILES: dict[str, SignalProfile] = {
     TREND_V1_PROFILE.name: TREND_V1_PROFILE,
+    TREND_ETF_V1_PROFILE.name: TREND_ETF_V1_PROFILE,
 }
 
 

@@ -44,8 +44,11 @@ docker compose down -v
 # Rebuild images after dependency changes
 docker compose build
 
-# Execute Python code in app container
-docker compose exec app python -m app.data_pipeline.fetch_daily
+# Daily market ETL
+docker compose exec app python scripts/etl_daily.py
+
+# Daily factor pipeline
+docker compose exec app python scripts/factor_daily.py
 
 # Open a shell in the app container
 docker compose exec app bash
@@ -58,6 +61,12 @@ docker compose exec app python scripts/init_qlib_data.py
 
 # Query factor API
 docker compose exec app python app/cli/query_factors.py --symbol 603019.SH --date 2026-04-30
+
+# Query ETF rotation snapshot
+docker compose exec app python app/cli/query_etf_rotation.py --date 2026-05-29 --top 10
+
+# Run ETF weekly backtest
+docker compose exec app python app/cli/backtest_etf_rotation.py --start-date 2025-06-03 --end-date 2026-05-29
 
 # View logs
 docker compose logs -f [service]   # services: app, timescaledb, redis, jupyter, grafana
@@ -76,25 +85,38 @@ docker compose logs -f [service]   # services: app, timescaledb, redis, jupyter,
 
 ### Data Layer (`docker/timescaledb/init.sql`)
 Four schemas in TimescaleDB:
-- **`market`** — Hypertables for `daily` (1-month chunks), `minute` (1-week chunks), `index_daily` data; continuous aggregate views `weekly` and `monthly` auto-roll up from `daily`
-- **`factors`** — `daily_factors` hypertable for computed factor/indicator data
-- **`signals`** — `trading_signals` with JSONB metadata
-- **`meta`** — `stocks` master data, `sync_status` for tracking data fetch state
+- **`market`** — `daily` is the main hypertable used by ETL/factor/backtest flows
+- **`factors`** — `daily_factors` hypertable for computed factor data
+- **`signals`** — `trading_signals` with JSONB metadata for persisted strategy outputs
+- **`meta`** — asset metadata and `sync_status`
 
-Compression policies auto-compress data older than 30–90 days. All hypertables are indexed on `(symbol, time)`.
+The current project is multi-asset by `asset_type` (for example `stock_CN`, `etf_CN`), and ETL / factor completeness is tracked per `asset_type`.
 
 ### Application Layer (`app/`)
 - **`app/utils/db.py`** — SQLAlchemy engine singleton with connection pooling; use `get_session()` context manager for all DB operations
 - **`app/utils/signals.py`** — `upsert_signals()`: write strategy signals to `signals.trading_signals`
-- **`app/data_pipeline/fetch_daily.py`** — Reference implementation: Tushare Pro fetch → Polars → UPSERT into TimescaleDB
-- **`app/factors/pipeline.py`** — Batch factor computation (MA/RSI/MACD) → `factors.daily_factors`
-- **`app/strategy/momentum.py`** — Momentum strategy: MA golden/death cross + RSI; outputs `(time, symbol, signal, score)`
+- **`app/data_loader/`** — Provider-based market data loading layer; Tushare is the current primary provider
+- **`app/services/signal_score.py`** — Builds `SignalSnapshot` tables (`build_signal_snapshot`) and query-facing score output
+- **`app/services/strategy_service.py`** — Bridges signal snapshots to strategy decisions for app and backtest consumers
+- **`app/strategy/etf_rotation.py`** — ETF cross-sectional rotation strategy; consumes signal snapshots and emits `StrategyDecisionTable`
+- **`app/strategy/momentum.py`** — Legacy momentum strategy prototype; not yet migrated to the new signal snapshot interface
+- **`app/backtest/runner.py`** — Decision-driven backtest runner; supports strategy-fed ETF rotation research, including weekly rebalance and costs
 - **`app/backtest/metrics.py`** — Annualized return, vol, Sharpe, max drawdown, Calmar
+
+### Signal / Strategy / Backtest split
+- **Signal layer** — produces normalized cross-sectional or time-series observations (`SignalSnapshot`)
+- **Strategy layer** — turns signal snapshots into executable decisions (`StrategyDecisionTable`)
+- **Backtest layer** — consumes strategy decisions only; it should not encode ranking or selection rules itself
+
+For ETF rotation specifically:
+- `app/cli/query_signal_scores.py` is the generic signal snapshot query entrypoint
+- `app/cli/query_etf_rotation.py` is the strategy-facing ETF daily snapshot entrypoint
+- `app/cli/backtest_etf_rotation.py` is the weekly backtest entrypoint
 
 ### Key Libraries
 - **Tushare** (`tushare>=1.4.0`) — Chinese market data source; requires `TUSHARE_TOKEN` env var; stock codes in `000001.SZ` format
 - **Polars** (`polars>=0.20.0`) — Primary DataFrame library; prefer over pandas except where Qlib requires pandas
-- **Qlib** (`pyqlib>=0.9.0`) — Strategy/backtest framework; requires pandas DataFrames
+- **Qlib** (`pyqlib>=0.9.0`) — Available for research integration, but the current ETF rotation backtest path is the in-repo `app/backtest/runner.py`
 - **ta** (`ta>=0.11.0`) — Technical indicators (pandas 2.x compatible)
 - **Loguru** — Logging throughout the app
 - **Pydantic v2 + pydantic-settings** — Config management
