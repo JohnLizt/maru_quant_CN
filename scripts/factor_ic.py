@@ -42,11 +42,16 @@ from app.utils.db import get_engine
 
 # ── DB 加载 ───────────────────────────────────────────────────
 
-def load_factors(engine, start: str, end: str,
-                 factor_names: list[str] | None = None) -> pl.DataFrame:
+def load_factors(
+    engine,
+    start: str,
+    end: str,
+    asset_type: str,
+    factor_names: list[str] | None = None,
+) -> pl.DataFrame:
     """从 factors.daily_factors 加载长格式因子数据"""
     where_factor = ""
-    params: dict = {"start": start, "end": end}
+    params: dict = {"start": start, "end": end, "asset_type": asset_type}
     if factor_names:
         placeholders = ", ".join(f":f{i}" for i in range(len(factor_names)))
         where_factor = f"AND factor_name IN ({placeholders})"
@@ -56,6 +61,7 @@ def load_factors(engine, start: str, end: str,
         SELECT time, symbol, factor_name, factor_value
         FROM factors.daily_factors
         WHERE time >= :start AND time <= :end
+          AND asset_type = :asset_type
           {where_factor}
     """)
     with engine.connect() as conn:
@@ -64,7 +70,7 @@ def load_factors(engine, start: str, end: str,
                         orient="row")
 
 
-def load_returns(engine, start: str, end: str, max_lag: int) -> pl.DataFrame:
+def load_returns(engine, start: str, end: str, asset_type: str, max_lag: int) -> pl.DataFrame:
     """从 market.daily 加载收益率（尾部多取 max_lag 个交易周的缓冲）"""
     # 用日历天估算：max_lag 交易日 ≈ max_lag * 2 日历天（含节假日缓冲）
     end_ext = (datetime.strptime(end, "%Y-%m-%d") + timedelta(days=max_lag * 2 + 5)).strftime("%Y-%m-%d")
@@ -72,10 +78,14 @@ def load_returns(engine, start: str, end: str, max_lag: int) -> pl.DataFrame:
         SELECT time, symbol, pct_change
         FROM market.daily
         WHERE time >= :start AND time <= :end
+          AND asset_type = :asset_type
         ORDER BY symbol, time
     """)
     with engine.connect() as conn:
-        rows = conn.execute(sql, {"start": start, "end": end_ext}).fetchall()
+        rows = conn.execute(
+            sql,
+            {"start": start, "end": end_ext, "asset_type": asset_type},
+        ).fetchall()
     df = pl.DataFrame(rows, schema=["time", "symbol", "pct_change"], orient="row")
     return df.with_columns(pl.col("pct_change").cast(pl.Float64))
 
@@ -252,33 +262,43 @@ def print_decay_grid(all_summaries: list[pl.DataFrame], lags: list[int]) -> None
 
 # ── 主流程 ────────────────────────────────────────────────────
 
-def main(start: str, end: str, lags: list[int],
-          factor_names: list[str] | None, output: str | None) -> None:
+def main(
+    start: str,
+    end: str,
+    lags: list[int],
+    asset_type: str,
+    factor_names: list[str] | None,
+    output: str | None,
+) -> None:
     engine = get_engine()
     max_lag = max(lags)
 
     try:
-        factors = resolve_factors(factor_names)
+        factors = resolve_factors(factor_names, asset_type=asset_type)
     except ValueError as exc:
         logger.error(str(exc))
         sys.exit(1)
 
     factor_min_cross_section = {factor.name: factor.ic_min_cross_section for factor in factors}
 
-    logger.info(f"IC 分析 | {start} ~ {end} | lags={lags}"
-                + (f" | factors={[factor.name for factor in factors]}" if factor_names else " | 全部因子"))
+    logger.info(
+        f"IC 分析 | asset_type={asset_type} | {start} ~ {end} | lags={lags}"
+        + (f" | factors={[factor.name for factor in factors]}" if factor_names else " | 全部因子")
+    )
 
-    df_factors = load_factors(engine, start, end, [factor.name for factor in factors])
+    df_factors = load_factors(engine, start, end, asset_type, [factor.name for factor in factors])
     if df_factors.is_empty():
-        logger.error("factors.daily_factors 无数据，请先运行 python scripts/factor_daily.py")
+        logger.error(
+            f"factors.daily_factors 无数据 | asset_type={asset_type}，请先运行 python scripts/factor_daily.py"
+        )
         sys.exit(1)
 
     available = df_factors["factor_name"].unique().sort().to_list()
     logger.info(f"因子: {available} | 记录数: {len(df_factors)}")
 
-    df_ret = load_returns(engine, start, end, max_lag)
+    df_ret = load_returns(engine, start, end, asset_type, max_lag)
     if df_ret.is_empty():
-        logger.error("market.daily 无数据")
+        logger.error(f"market.daily 无数据 | asset_type={asset_type}")
         sys.exit(1)
 
     all_summaries: list[pl.DataFrame] = []
@@ -314,6 +334,8 @@ if __name__ == "__main__":
                         help=f"结束日期 YYYY-MM-DD（默认 {_default_end}）")
     parser.add_argument("--lags",  default="1,2,5,10,20",
                         help="逗号分隔的 forward lag（默认 1,2,5,10,20）。例：--lags 1,2,5,10,20")
+    parser.add_argument("--asset-type", default="stock_CN",
+                        help="资产类型，默认 stock_CN，例如 etf_CN")
     parser.add_argument("--factors", default=None,
                         help="逗号分隔的因子名称，默认全部")
     parser.add_argument("--output", default=None,
@@ -322,4 +344,4 @@ if __name__ == "__main__":
 
     lags         = [int(x.strip()) for x in args.lags.split(",")]
     factor_names = [f.strip() for f in args.factors.split(",")] if args.factors else None
-    main(args.start, args.end, lags, factor_names, args.output)
+    main(args.start, args.end, lags, args.asset_type, factor_names, args.output)
