@@ -89,3 +89,52 @@ def load_ohlcv(engine, asset_type: str, symbol: str, start: str, end: str, field
     if not rows:
         return pl.DataFrame(schema=schema)
     return pl.DataFrame(rows, schema=ordered_columns, orient="row").cast(schema)
+
+
+def load_ohlcv_panel(
+    engine,
+    asset_type: str,
+    symbols: list[str],
+    start: str,
+    end: str,
+    fields: set[str] | None = None,
+) -> pl.DataFrame:
+    """加载多 symbol 的行情面板数据。"""
+    requested = set(fields or DEFAULT_SCHEMA.keys())
+    requested.update({"time", "asset_type", "symbol", "is_suspended"})
+
+    ordered_columns = [
+        column
+        for column in ["time", "asset_type", "symbol", "open", "high", "low", "close", "volume", "is_suspended"]
+        if column in requested
+    ]
+    schema = {column: DEFAULT_SCHEMA[column] for column in ordered_columns}
+
+    if not symbols:
+        return pl.DataFrame(schema=schema)
+
+    placeholders = ", ".join(f":symbol_{index}" for index in range(len(symbols)))
+    params = {
+        "asset_type": asset_type,
+        "start": _iso(start),
+        "end": _iso(end),
+        **{f"symbol_{index}": symbol for index, symbol in enumerate(symbols)},
+    }
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                f"""
+                SELECT {', '.join(ordered_columns)}
+                FROM market.daily
+                WHERE asset_type = :asset_type
+                  AND symbol IN ({placeholders})
+                  AND time BETWEEN :start AND :end
+                ORDER BY symbol, time
+                """
+            ),
+            params,
+        ).fetchall()
+    if not rows:
+        return pl.DataFrame(schema=schema)
+    return pl.DataFrame(rows, schema=ordered_columns, orient="row").cast(schema)

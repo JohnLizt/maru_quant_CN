@@ -1,7 +1,4 @@
-"""
-因子基类
-所有因子继承 BaseFactor，实现 compute() 方法
-"""
+"""因子基类与执行形态定义。"""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -12,12 +9,7 @@ from app.factors.specs import FactorSpec, SuspendedPolicy
 
 
 class BaseFactor(ABC):
-    """
-    因子基类
-
-    子类须实现 compute()，接收包含 OHLCV 列的 DataFrame，
-    返回新增因子列的 DataFrame。
-    """
+    """因子公共元信息与输出工具。"""
 
     spec: FactorSpec
 
@@ -44,20 +36,6 @@ class BaseFactor(ABC):
     def supports_asset_type(self, asset_type: str) -> bool:
         return asset_type in self.spec.supported_asset_types
 
-    @abstractmethod
-    def compute(self, df: pl.DataFrame) -> pl.DataFrame:
-        """
-        计算因子值
-
-        Args:
-            df: 包含 time, symbol, open, high, low, close, volume 列，按 time 升序排列。
-                若存在 is_suspended 列，基类会按 suspended_policy 对停牌日因子值做统一处理。
-
-        Returns:
-            长格式 DataFrame，列：time, symbol, factor_name, factor_value
-        """
-        ...
-
     def _apply_suspended_policy(self, df: pl.DataFrame, value_col: str) -> pl.DataFrame:
         """按因子策略处理停牌日因子值。"""
         if "is_suspended" not in df.columns or self.suspended_policy == "allow":
@@ -82,3 +60,37 @@ class BaseFactor(ABC):
         return df.select(columns).rename({value_col: "factor_value"}).with_columns(
             pl.lit(self.name).alias("factor_name")
         )
+
+
+class TimeSeriesFactor(BaseFactor, ABC):
+    """按单个 symbol 时序独立计算的因子。"""
+
+    @abstractmethod
+    def compute(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        计算单个 symbol 的时序因子。
+
+        Args:
+            df: 单个 symbol 的 OHLCV 序列，按 time 升序排列。
+
+        Returns:
+            长格式 DataFrame，列：time, symbol, factor_name, factor_value
+        """
+        ...
+
+
+class CrossSectionalFactor(BaseFactor, ABC):
+    """需要同一交易日全池面板数据的截面因子。"""
+
+    @abstractmethod
+    def compute(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        计算全池截面因子。
+
+        Args:
+            df: 多个 symbol 的 OHLCV 面板数据，至少包含 time/symbol。
+
+        Returns:
+            长格式 DataFrame，列：time, symbol, factor_name, factor_value
+        """
+        ...

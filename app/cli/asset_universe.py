@@ -17,9 +17,10 @@ from app.services.asset_universe import (
     get_pipeline_symbol_name_map,
     load_pipeline_universe,
     normalize_asset_type,
-    normalize_symbol,
+    normalize_symbol_for_asset_type,
     write_pipeline_universe_rows,
 )
+from app.data_loader.symbol_backfill import sync_universe_symbol
 
 
 def _expand_symbols(raw_symbols: list[str]) -> list[str]:
@@ -63,17 +64,21 @@ def _resolve_name(symbol: str, *, existing_map: dict[str, str], override_name: s
 
 def add_symbols(asset_type: str, symbols: list[str], names: list[str | None] | None = None) -> list[dict[str, str]]:
     existing_map = _get_name_map(asset_type)
+    existing_symbols = set(existing_map)
     for index, raw_symbol in enumerate(symbols):
-        symbol = normalize_symbol(raw_symbol)
+        symbol = normalize_symbol_for_asset_type(asset_type, raw_symbol)
         raw_name = names[index] if names and index < len(names) else None
         existing_map[symbol] = _resolve_name(symbol, existing_map=existing_map, override_name=raw_name)
 
     rows = [{"symbol": symbol, "name": name, "is_active": "true"} for symbol, name in existing_map.items()]
-    return write_pipeline_universe_rows(asset_type, rows)
+    written_rows = write_pipeline_universe_rows(asset_type, rows)
+    new_symbols = [row["symbol"] for row in written_rows if row["symbol"] not in existing_symbols]
+    sync_results = [sync_universe_symbol(symbol, asset_type=asset_type) for symbol in new_symbols]
+    return written_rows, sync_results
 
 
 def remove_symbols(asset_type: str, symbols: list[str]) -> list[dict[str, str]]:
-    remove_set = {normalize_symbol(symbol) for symbol in symbols}
+    remove_set = {normalize_symbol_for_asset_type(asset_type, symbol) for symbol in symbols}
     rows = [row for row in _list_rows(asset_type) if row["symbol"] not in remove_set]
     return write_pipeline_universe_rows(asset_type, rows)
 
@@ -83,7 +88,7 @@ def replace_symbols(asset_type: str, symbols: list[str]) -> list[dict[str, str]]
     deduped_symbols: list[str] = []
     seen: set[str] = set()
     for raw_symbol in symbols:
-        symbol = normalize_symbol(raw_symbol)
+        symbol = normalize_symbol_for_asset_type(asset_type, raw_symbol)
         if symbol in seen:
             continue
         seen.add(symbol)
@@ -97,7 +102,7 @@ def replace_symbols(asset_type: str, symbols: list[str]) -> list[dict[str, str]]
 
 
 def update_symbol(asset_type: str, symbol: str, name: str | None = None) -> list[dict[str, str]]:
-    normalized_symbol = normalize_symbol(symbol)
+    normalized_symbol = normalize_symbol_for_asset_type(asset_type, symbol)
     existing_map = _get_name_map(asset_type)
     existing_map[normalized_symbol] = _resolve_name(
         normalized_symbol,
@@ -105,7 +110,9 @@ def update_symbol(asset_type: str, symbol: str, name: str | None = None) -> list
         override_name=name,
     )
     rows = [{"symbol": current_symbol, "name": current_name, "is_active": "true"} for current_symbol, current_name in existing_map.items()]
-    return write_pipeline_universe_rows(asset_type, rows)
+    written_rows = write_pipeline_universe_rows(asset_type, rows)
+    sync_results = [sync_universe_symbol(normalized_symbol, asset_type=asset_type)]
+    return written_rows, sync_results
 
 
 def main() -> None:
@@ -137,7 +144,8 @@ def main() -> None:
         return
 
     if args.command == "add":
-        _print_rows(add_symbols(asset_type, _expand_symbols(args.symbols or []), names=args.names or []))
+        rows, sync_results = add_symbols(asset_type, _expand_symbols(args.symbols or []), names=args.names or [])
+        print(json.dumps({"count": len(rows), "rows": rows, "sync_results": sync_results}, ensure_ascii=False, indent=2))
         return
 
     if args.command == "remove":
@@ -149,7 +157,8 @@ def main() -> None:
         return
 
     if args.command == "update":
-        _print_rows(update_symbol(asset_type, args.symbol, name=args.name))
+        rows, sync_results = update_symbol(asset_type, args.symbol, name=args.name)
+        print(json.dumps({"count": len(rows), "rows": rows, "sync_results": sync_results}, ensure_ascii=False, indent=2))
         return
 
     raise ValueError(f"未知命令: {args.command}")

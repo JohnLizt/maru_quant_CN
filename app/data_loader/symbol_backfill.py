@@ -1,6 +1,4 @@
-"""
-个股因子缺失时的自动补算服务。
-"""
+"""Single-symbol market and time-series factor backfill helpers."""
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
@@ -11,7 +9,8 @@ from loguru import logger
 from app.data_loader.market_data import fetch_daily_by_symbol, upsert_daily
 from app.factors.pipeline.loader import load_ohlcv
 from app.factors.pipeline.writer import upsert_factors
-from app.factors.registry import max_warmup_days, required_market_fields, resolve_factors
+from app.factors.registry import max_warmup_days, required_market_fields, resolve_factors, time_series_factors
+from app.services.asset_universe import normalize_symbol_for_asset_type
 from app.utils.db import get_engine
 
 
@@ -32,7 +31,7 @@ def _factor_date_strings(start: date, end: date) -> set[str]:
 
 
 def _compute_symbol_factors(asset_type: str, symbol: str, start: date, end: date) -> int:
-    factors = resolve_factors(asset_type=asset_type)
+    factors = time_series_factors(resolve_factors(asset_type=asset_type))
     engine = get_engine()
     warmup_days = max_warmup_days(factors)
     warmup_start = _yyyymmdd(start - timedelta(days=warmup_days))
@@ -54,10 +53,8 @@ def _compute_symbol_factors(asset_type: str, symbol: str, start: date, end: date
 
 
 def backfill_symbol_factors(symbol: str, *, asset_type: str = "stock_CN", end_date: date | None = None) -> bool:
-    """补齐单只股票过去一年行情与因子；成功后加入全局股票池。"""
-    normalized_symbol = symbol.strip().upper()
-    if not normalized_symbol:
-        raise ValueError("symbol 不能为空")
+    """补齐单只标的过去一年行情与因子。"""
+    normalized_symbol = normalize_symbol_for_asset_type(asset_type, symbol)
 
     end = end_date or datetime.now(timezone.utc).date()
     start = end - timedelta(days=BACKFILL_WINDOW_DAYS)
@@ -82,3 +79,13 @@ def backfill_symbol_factors(symbol: str, *, asset_type: str = "stock_CN", end_da
         f"自动补算完成 | symbol={normalized_symbol} | market_rows={daily_written} | factor_rows={factor_written}"
     )
     return True
+
+
+def sync_universe_symbol(symbol: str, *, asset_type: str = "stock_CN", end_date: date | None = None) -> dict[str, object]:
+    normalized_symbol = normalize_symbol_for_asset_type(asset_type, symbol)
+    synced = backfill_symbol_factors(normalized_symbol, asset_type=asset_type, end_date=end_date)
+    return {
+        "symbol": normalized_symbol,
+        "asset_type": asset_type,
+        "synced": synced,
+    }

@@ -17,7 +17,7 @@ from loguru import logger
 from sqlalchemy import text
 
 from app.factors.registry import FACTOR_REGISTRY, resolve_factors
-from app.services.factor_backfill import backfill_symbol_factors
+from app.data_loader.symbol_backfill import backfill_symbol_factors
 from app.utils.db import get_engine
 
 

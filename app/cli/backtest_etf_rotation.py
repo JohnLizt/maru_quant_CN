@@ -38,6 +38,7 @@ def _to_compact_rows(df, limit: int) -> list[dict]:
 def main(
     start_date: str,
     end_date: str,
+    profile_name: str,
     top_n: int,
     max_per_tag: int,
     rebalance_weekday: int,
@@ -65,13 +66,13 @@ def main(
 
     strategy = ETFUniverseRotationStrategy(
         top_n=top_n,
-        profile_name="trend_etf_v1",
+        profile_name=profile_name,
         max_per_tag=max_per_tag,
     )
     bundle = run_strategy_backtest(
         strategy,
         asset_type="etf_CN",
-        profile_name="trend_etf_v1",
+        profile_name=profile_name,
         start=start_date,
         end=end_date,
         rebalance_frequency="weekly",
@@ -100,7 +101,7 @@ def main(
     payload = {
         "query": {
             "asset_type": "etf_CN",
-            "profile": "trend_etf_v1",
+            "profile": profile_name,
             "strategy": strategy.strategy_name,
             "strategy_mode": strategy.strategy_mode,
             "start_date": start_date,
@@ -136,7 +137,7 @@ def main(
     print("ETF Rotation Backtest")
     print(f"asset_type: etf_CN")
     print(f"window: {start_date} -> {end_date}")
-    print(f"strategy: {strategy.strategy_name} | profile: trend_etf_v1")
+    print(f"strategy: {strategy.strategy_name} | profile: {profile_name}")
     print(
         "weekly rebalance: weekday={} | top_n={} | max_per_tag={} | execution_lag={} | commission_bps={} | slippage_bps={}".format(
             rebalance_weekday,
@@ -172,6 +173,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run ETF CN weekly rotation backtest")
     parser.add_argument("--start-date", default="2023-06-03", help="开始日期 YYYY-MM-DD")
     parser.add_argument("--end-date", default=default_end, help="结束日期 YYYY-MM-DD")
+    parser.add_argument("--profile", default="trend_etf_v1", help="ETF signal profile，默认 trend_etf_v1")
     parser.add_argument("--top-n", type=int, default=5, help="持仓数量，默认 5")
     parser.add_argument("--max-per-tag", type=int, default=1, help="同 tag 最大持仓数，默认 1")
     parser.add_argument("--rebalance-weekday", type=int, default=2, help="周调仓日，Python weekday 语义，周一=0，默认周三=2")
@@ -193,6 +195,7 @@ if __name__ == "__main__":
         main(
             args.start_date,
             args.end_date,
+            args.profile,
             args.top_n,
             args.max_per_tag,
             args.rebalance_weekday,

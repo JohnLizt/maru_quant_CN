@@ -13,7 +13,7 @@ from __future__ import annotations
 import polars as pl
 import ta
 
-from app.factors.base import BaseFactor
+from app.factors.base import TimeSeriesFactor
 from app.factors.specs import FactorSpec
 
 
@@ -22,7 +22,7 @@ def _clean(result: pl.DataFrame) -> pl.DataFrame:
     return result.drop_nulls("factor_value").filter(pl.col("factor_value").is_not_nan())
 
 
-class PriceToMA20Factor(BaseFactor):
+class PriceToMA20Factor(TimeSeriesFactor):
     """价格偏离 20 日均线比率：(close - MA20) / MA20"""
 
     spec = FactorSpec(
@@ -50,7 +50,7 @@ class PriceToMA20Factor(BaseFactor):
         return _clean(self._to_long(result, "factor_value"))
 
 
-class MACrossGactor(BaseFactor):
+class MACrossGactor(TimeSeriesFactor):
     """均线斜率：(MA20 - MA60) / MA60，正值为多头排列（金叉），负值为空头排列（死叉）"""
 
     spec = FactorSpec(
@@ -80,7 +80,7 @@ class MACrossGactor(BaseFactor):
         return _clean(self._to_long(result, "factor_value"))
 
 
-class RSIFactor(BaseFactor):
+class RSIFactor(TimeSeriesFactor):
     """14 日 RSI（0~100），已归一化，跨股票可比"""
 
     spec = FactorSpec(
@@ -103,7 +103,7 @@ class RSIFactor(BaseFactor):
         return _clean(self._to_long(result, "factor_value"))
 
 
-class MACDNormFactor(BaseFactor):
+class MACDNormFactor(TimeSeriesFactor):
     """MACD 差离值 / 收盘价，消除价格量纲后跨股票可比"""
 
     spec = FactorSpec(
@@ -127,3 +127,47 @@ class MACDNormFactor(BaseFactor):
             )
         )
         return _clean(self._to_long(result, "factor_value"))
+
+
+class LimitUpFactor(TimeSeriesFactor):
+    """
+    涨停触及因子
+
+    定义：当天最高价 >= 理论涨停价（前收盘价 × 1.1，四舍五入到分）
+    值：1.0 = 触及涨停，0.0 = 未触及
+
+    注意：
+    - 仅适用于普通 A 股（非 ST，涨跌幅限制 ±10%）
+    - 新股上市首日 prev_close 为 null，对应行输出 null 并在写入时被过滤
+    """
+
+    spec = FactorSpec(
+        name="limit_up",
+        category="time_series",
+        warmup_days=2,
+        suspended_policy="mask",
+        required_fields=("high", "close"),
+        ic_min_cross_section=None,
+        description="high >= prev_close * 1.1",
+        supported_asset_types=("stock_CN",),
+    )
+
+    def compute(self, df: pl.DataFrame) -> pl.DataFrame:
+        result = (
+            df.with_columns(
+                pl.col("close").shift(1).alias("prev_close")
+            )
+            .with_columns(
+                limit_up_price=(pl.col("prev_close") * 1.1).round(2)
+            )
+            .with_columns(
+                factor_value=(pl.col("high") >= pl.col("limit_up_price")).cast(pl.Float64)
+            )
+            .with_columns(
+                pl.when(pl.col("prev_close").is_null())
+                .then(None)
+                .otherwise(pl.col("factor_value"))
+                .alias("factor_value")
+            )
+        )
+        return self._to_long(result, "factor_value").drop_nulls("factor_value")
