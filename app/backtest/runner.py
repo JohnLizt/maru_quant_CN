@@ -105,14 +105,24 @@ def _filter_rebalance_dates(
 ) -> pl.DataFrame:
     if rebalance_frequency == "daily":
         return decisions
-    if rebalance_frequency != "weekly":
+    if rebalance_frequency not in {"weekly", "biweekly"}:
         raise NotImplementedError(f"暂不支持的调仓频率: {rebalance_frequency}")
     if rebalance_weekday is None:
-        raise ValueError("weekly 调仓必须指定 rebalance_weekday")
+        raise ValueError(f"{rebalance_frequency} 调仓必须指定 rebalance_weekday")
     if not 0 <= rebalance_weekday <= 6:
         raise ValueError("rebalance_weekday 必须在 0~6 之间，采用 Python weekday 语义（周一=0）")
 
-    return decisions.filter((pl.col("time").dt.weekday() - 1) == pl.lit(rebalance_weekday))
+    weekday_filtered = decisions.filter((pl.col("time").dt.weekday() - 1) == pl.lit(rebalance_weekday))
+    if rebalance_frequency == "weekly":
+        return weekday_filtered
+    if weekday_filtered.is_empty():
+        return weekday_filtered
+
+    selected_dates = sorted({
+        current for current in weekday_filtered.get_column("time").dt.date().to_list() if current is not None
+    })
+    biweekly_dates = selected_dates[::2]
+    return weekday_filtered.filter(pl.col("time").dt.date().is_in(biweekly_dates))
 
 
 def _build_effective_holdings(

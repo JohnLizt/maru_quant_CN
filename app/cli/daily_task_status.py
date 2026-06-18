@@ -45,7 +45,15 @@ def _rows() -> list[dict[str, object]]:
     with get_engine().connect() as conn:
         rows = conn.execute(
             sql,
-            {"asset_types": asset_types, "data_types": ["daily_market", "daily_factors"]},
+            {
+                "asset_types": asset_types,
+                "data_types": [
+                    "daily_market",
+                    "daily_factors",
+                    "factor_daily_ic",
+                    "factor_ic_summary",
+                ],
+            },
         ).fetchall()
 
     return [
@@ -87,7 +95,7 @@ def main(output_format: str) -> None:
     for asset in payload["assets"]:
         print(f"[{asset['asset_type']}]")
         steps = asset["steps"]
-        for data_type in ["daily_market", "daily_factors"]:
+        for data_type in ["daily_market", "daily_factors", "factor_daily_ic", "factor_ic_summary"]:
             step = steps.get(data_type)
             if step is None:
                 print(f"  {data_type}: missing")

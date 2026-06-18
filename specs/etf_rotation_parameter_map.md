@@ -135,25 +135,19 @@
 
 ### 3.2 因子集合与权重
 
-`trend_etf_v1` 当前使用 4 个因子：
+`trend_etf_v1` 当前使用 1 个因子：
 
-1. `rsi14`
-2. `price_to_ma20`
-3. `macd_norm`
-4. `ma_cross`
+1. `ret_30_rank`
 
 当前权重：
 
-- `rsi14 = 0.4633`
-- `price_to_ma20 = 0.3314`
-- `macd_norm = 0.1606`
-- `ma_cross = 0.0447`
+- `ret_30_rank = 1.0`
 
 说明：
 
-- 权重来自 `etf_CN` 最近一版 `factor_ic` 的 `10d IC` 结果
-- 目前 `rsi14` 是最重要因子
-- `ma_cross` 仍保留，但权重已经很低
+- 当前默认 ETF 轮动已经切到 `ret_30_rank` 纯动量版本
+- `ret_30_rank` 表示 30 日收益在当日全 ETF 池中的 `[0,1]` 百分位
+- 当前 profile 不再混合 `rsi14`、`price_to_ma20`、`macd_norm`、`ma_cross`
 
 ### 3.3 因子归一化规则
 
@@ -163,31 +157,16 @@
 
 当前规则：
 
-- `rsi14`
-  - 方法：`piecewise`
-  - `left_score = -0.8`
-  - `right_score = 0.2`
-  - 分段：
-    - `40 -> 52` 映射 `-0.2 -> 0.4`
-    - `52 -> 68` 映射 `0.4 -> 1.0`
-    - `68 -> 82` 映射 `1.0 -> 0.2`
-- `price_to_ma20`
+- `ret_30_rank`
   - 方法：`linear_clip`
-  - `clip_lower = -0.08`
-  - `clip_upper = 0.10`
-- `macd_norm`
-  - 方法：`linear_clip`
-  - `clip_lower = -0.03`
-  - `clip_upper = 0.03`
-- `ma_cross`
-  - 方法：`linear_clip`
-  - `clip_lower = -0.10`
-  - `clip_upper = 0.10`
+  - `clip_lower = 0.0`
+  - `clip_upper = 1.0`
 
 影响：
 
-- `rsi14` 并不是越高越好，过热区会回落
-- `price_to_ma20`、`macd_norm`、`ma_cross` 都是裁剪后线性映射
+- `ret_30_rank` 原始值本身就是横截面百分位
+- 当前 profile 只是把 `[0,1]` 再线性映射到 `[-1,1]`
+- 排名越靠前，综合分越高
 
 ### 3.4 综合分标签阈值
 
@@ -223,6 +202,9 @@
 - `price_above_ma20 / below_ma20`
 - `rsi_in_healthy_trend_zone / rsi_overheated / rsi_weak`
 - `macd_momentum_strong / weak`
+
+但在当前 `trend_etf_v1` 下，这些解释标签都不会触发，因为 profile 只包含 `ret_30_rank`。
+当前没有为 `ret_30_rank` 单独定义 contributor 标签，因此默认会落到 `mixed_signal`。
 
 ## 4. Strategy 层
 
@@ -297,6 +279,7 @@ CLI 默认值：
 - `end_date = 当前日期`
 - `top_n = 5`
 - `max_per_tag = 1`
+- `rebalance_frequency = weekly`
 - `rebalance_weekday = 2`
 - `execution_lag = 1`
 - `commission_bps = 5.0`
@@ -367,7 +350,7 @@ CLI 默认值：
 
 - `trend_etf_v1` 的因子集合
 - `trend_etf_v1` 的因子权重
-- `rsi14` / `price_to_ma20` / `macd_norm` / `ma_cross` 的归一化区间
+- `ret_30_rank` 的归一化区间
 - `strong/positive/...` 标签阈值
 
 ### 第三优先级：直接影响回测表现
@@ -383,8 +366,7 @@ CLI 默认值：
 
 - 在 `etf_CN` 的 `207` 只 active ETF 中
 - 使用 `trend_etf_v1`
-- 以 `rsi14 + price_to_ma20 + macd_norm + ma_cross` 横截面打分
-- 其中 `rsi14` 权重最高
+- 以 `ret_30_rank` 横截面打分
 - 每日得到全池排名
 - 策略实际取 `top 5`
 - 同一 `tag` 最多保留 `1` 只
