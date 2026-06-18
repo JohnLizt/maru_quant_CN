@@ -34,166 +34,15 @@ sys.path.insert(0, "/app")
 
 import polars as pl
 from loguru import logger
-from sqlalchemy import text
 
+from app.analytics.factor_ic import (
+    compute_daily_ic,
+    load_factors,
+    load_returns,
+    summarize_daily_ic,
+)
 from app.factors.registry import FACTOR_REGISTRY, resolve_factors
 from app.utils.db import get_engine
-
-
-# ── DB 加载 ───────────────────────────────────────────────────
-
-def load_factors(
-    engine,
-    start: str,
-    end: str,
-    asset_type: str,
-    factor_names: list[str] | None = None,
-) -> pl.DataFrame:
-    """从 factors.daily_factors 加载长格式因子数据"""
-    where_factor = ""
-    params: dict = {"start": start, "end": end, "asset_type": asset_type}
-    if factor_names:
-        placeholders = ", ".join(f":f{i}" for i in range(len(factor_names)))
-        where_factor = f"AND factor_name IN ({placeholders})"
-        params |= {f"f{i}": n for i, n in enumerate(factor_names)}
-
-    sql = text(f"""
-        SELECT time, symbol, factor_name, factor_value
-        FROM factors.daily_factors
-        WHERE time >= :start AND time <= :end
-          AND asset_type = :asset_type
-          {where_factor}
-    """)
-    with engine.connect() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    return pl.DataFrame(rows, schema=["time", "symbol", "factor_name", "factor_value"],
-                        orient="row")
-
-
-def load_returns(engine, start: str, end: str, asset_type: str, max_lag: int) -> pl.DataFrame:
-    """从 market.daily 加载收益率（尾部多取 max_lag 个交易周的缓冲）"""
-    # 用日历天估算：max_lag 交易日 ≈ max_lag * 2 日历天（含节假日缓冲）
-    end_ext = (datetime.strptime(end, "%Y-%m-%d") + timedelta(days=max_lag * 2 + 5)).strftime("%Y-%m-%d")
-    sql = text("""
-        SELECT time, symbol, pct_change
-        FROM market.daily
-        WHERE time >= :start AND time <= :end
-          AND asset_type = :asset_type
-        ORDER BY symbol, time
-    """)
-    with engine.connect() as conn:
-        rows = conn.execute(
-            sql,
-            {"start": start, "end": end_ext, "asset_type": asset_type},
-        ).fetchall()
-    df = pl.DataFrame(rows, schema=["time", "symbol", "pct_change"], orient="row")
-    return df.with_columns(pl.col("pct_change").cast(pl.Float64))
-
-
-# ── IC 计算 ───────────────────────────────────────────────────
-
-def compute_daily_ic(df_factors: pl.DataFrame, df_ret: pl.DataFrame,
-                     lag: int, factor_min_cross_section: dict[str, int | None]) -> pl.DataFrame:
-    """
-    计算每日截面 IC / RankIC（对应未来 lag 期累计收益）
-
-    Returns: DataFrame[factor_name, time, ic, rank_ic, n_stocks]
-    """
-    df_next = (
-        df_ret
-        .sort(["symbol", "time"])
-        .with_columns(
-            ((pl.col("pct_change") / 100.0) + 1.0).alias("gross_ret")
-        )
-        .with_columns([
-            pl.col("gross_ret")
-            .shift(-offset)
-            .over("symbol")
-            .alias(f"gross_ret_t{offset}")
-            for offset in range(1, lag + 1)
-        ])
-        .with_columns(
-            (
-                pl.fold(
-                    acc=pl.lit(1.0),
-                    function=lambda acc, x: acc * x,
-                    exprs=[pl.col(f"gross_ret_t{offset}") for offset in range(1, lag + 1)],
-                ) - 1.0
-            ).alias("fwd_ret")
-        )
-        .drop(["pct_change", "gross_ret"] + [f"gross_ret_t{offset}" for offset in range(1, lag + 1)])
-        .drop_nulls("fwd_ret")
-    )
-
-    df = df_factors.join(df_next, on=["time", "symbol"], how="inner")
-    df = df.filter(pl.col("factor_value").is_finite() & pl.col("fwd_ret").is_finite())
-
-    if df.is_empty():
-        return pl.DataFrame(schema={
-            "factor_name": pl.Utf8, "time": pl.Datetime("us", "UTC"),
-            "ic": pl.Float64, "rank_ic": pl.Float64, "n_stocks": pl.UInt32,
-        })
-
-    daily_ic = (
-        df.group_by(["factor_name", "time"])
-        .agg([
-            pl.corr("factor_value", "fwd_ret", method="pearson").alias("ic"),
-            pl.corr("factor_value", "fwd_ret", method="spearman").alias("rank_ic"),
-            pl.len().alias("n_stocks"),
-        ])
-        .sort(["factor_name", "time"])
-        .with_columns(
-            pl.col("factor_name").replace_strict(
-                factor_min_cross_section,
-                default=None,
-                return_dtype=pl.Int64,
-            ).alias("min_cross_section")
-        )
-        .filter(
-            pl.col("min_cross_section").is_null() | (pl.col("n_stocks") >= pl.col("min_cross_section"))
-        )
-        .with_columns([
-            pl.col("ic").fill_nan(None),
-            pl.col("rank_ic").fill_nan(None),
-        ])
-        .drop("min_cross_section")
-    )
-
-    nan_days = daily_ic.filter(pl.col("ic").is_null()).group_by("factor_name").len()
-    for row in nan_days.iter_rows(named=True):
-        logger.debug(f"  lag={lag} {row['factor_name']}: {row['len']} 天截面零方差，已跳过")
-
-    return daily_ic
-
-
-def summarize_ic(daily_ic: pl.DataFrame, lag: int) -> pl.DataFrame:
-    """从每日 IC 序列汇总统计指标"""
-    return (
-        daily_ic
-        .group_by("factor_name")
-        .agg([
-            pl.col("ic").mean().alias("mean_ic"),
-            pl.col("ic").std().alias("ic_std"),
-            pl.col("rank_ic").mean().alias("mean_rank_ic"),
-            pl.col("rank_ic").std().alias("rank_ic_std"),
-            (pl.col("ic") > 0).mean().alias("win_rate"),
-            pl.col("ic").count().alias("n_days"),
-        ])
-        .with_columns([
-            (pl.col("mean_ic") / pl.col("ic_std")).alias("ic_ir"),
-            (pl.col("mean_rank_ic") / pl.col("rank_ic_std")).alias("rank_ic_ir"),
-        ])
-        .with_columns(
-            (pl.col("ic_ir") * pl.col("n_days").sqrt()).alias("t_stat"),
-        )
-        .with_columns(pl.lit(lag).alias("lag"))
-        .select([
-            "lag", "factor_name",
-            "mean_rank_ic", "rank_ic_std", "rank_ic_ir",
-            "mean_ic", "ic_std", "ic_ir", "t_stat", "win_rate", "n_days",
-        ])
-        .sort("ic_ir", descending=True)
-    )
 
 
 # ── 打印 ──────────────────────────────────────────────────────
@@ -307,7 +156,7 @@ def main(
         if daily_ic.is_empty():
             logger.warning(f"lag={lag}: IC 结果为空，跳过")
             continue
-        summary = summarize_ic(daily_ic, lag)
+        summary = summarize_daily_ic(daily_ic, lag)
         all_summaries.append(summary)
         print_full_table(summary, lag)
 
