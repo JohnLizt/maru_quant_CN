@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG_DIR="$ROOT_DIR/logs"
+LOG_DIR="$ROOT_DIR/logs/daily"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="$LOG_DIR/daily_tasks_${TIMESTAMP}.log"
 DAILY_ETL_LOOKBACK_DAYS="${DAILY_ETL_LOOKBACK_DAYS:-7}"

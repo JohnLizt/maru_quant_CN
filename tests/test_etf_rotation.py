@@ -31,34 +31,31 @@ def test_resolve_factors_rejects_unsupported_factor_for_etf() -> None:
 def test_trend_etf_v1_profile_weights_and_factor_set() -> None:
     profile = get_signal_profile("trend_etf_v1")
 
-    assert profile.factor_names == ["rsi14", "price_to_ma20", "macd_norm", "ma_cross"]
+    assert profile.factor_names == ["ret_30_rank"]
     assert profile.signal_mode == "cross_sectional"
     assert profile.supported_asset_types == ("etf_CN",)
-    weights = {rule.factor_name: rule.weight for rule in profile.factor_rules}
-    assert pytest.approx(sum(weights.values()), rel=1e-6) == 1.0
-    assert weights["rsi14"] > weights["price_to_ma20"] > weights["macd_norm"] > weights["ma_cross"]
+    rule = profile.factor_rules[0]
+    assert rule.method == "linear_clip"
+    assert rule.weight == 1.0
+    assert rule.clip_lower == 0.0
+    assert rule.clip_upper == 1.0
 
 
-def test_trend_etf_v1_composite_includes_macd_contributor() -> None:
+def test_trend_etf_v1_composite_uses_ret30_rank_score() -> None:
     profile = get_signal_profile("trend_etf_v1")
     df = pl.DataFrame(
         [
             {
-                "rsi14": 65.0,
-                "rsi14_score": 0.8,
-                "price_to_ma20": 0.05,
-                "price_to_ma20_score": 0.6,
-                "macd_norm": 0.02,
-                "macd_norm_score": 0.7,
-                "ma_cross": 0.01,
-                "ma_cross_score": 0.1,
+                "ret_30_rank": 0.95,
+                "ret_30_rank_score": 0.9,
             }
         ]
     )
 
     result = apply_composite_score(df, profile)
 
-    assert "macd_momentum_strong" in result.get_column("contributors").to_list()[0]
+    assert result.get_column("composite_score").to_list()[0] == pytest.approx(0.9)
+    assert result.get_column("contributors").to_list()[0] == ["mixed_signal"]
     assert result.get_column("label").to_list()[0] == "strong"
 
 
@@ -318,6 +315,86 @@ def test_run_backtest_weekly_uses_python_weekday_and_costs(monkeypatch: pytest.M
     assert second_turnover == pytest.approx(1.0)
 
 
+def test_run_backtest_biweekly_keeps_every_other_weekday(monkeypatch: pytest.MonkeyPatch) -> None:
+    wed1 = datetime(2026, 5, 27, tzinfo=timezone.utc)
+    wed2 = datetime(2026, 6, 3, tzinfo=timezone.utc)
+    wed3 = datetime(2026, 6, 10, tzinfo=timezone.utc)
+    decisions = pl.DataFrame(
+        [
+            {
+                "time": wed1,
+                "asset_type": "etf_CN",
+                "strategy": "etf_rotation_v1",
+                "strategy_mode": "cross_sectional",
+                "symbol": "AAA",
+                "decision_type": "target_weight",
+                "signal": 1,
+                "target_weight": 1.0,
+                "score": 0.9,
+                "rank": 1,
+                "tag": "alpha",
+                "metadata": "{}",
+            },
+            {
+                "time": wed2,
+                "asset_type": "etf_CN",
+                "strategy": "etf_rotation_v1",
+                "strategy_mode": "cross_sectional",
+                "symbol": "BBB",
+                "decision_type": "target_weight",
+                "signal": 1,
+                "target_weight": 1.0,
+                "score": 0.8,
+                "rank": 1,
+                "tag": "beta",
+                "metadata": "{}",
+            },
+            {
+                "time": wed3,
+                "asset_type": "etf_CN",
+                "strategy": "etf_rotation_v1",
+                "strategy_mode": "cross_sectional",
+                "symbol": "CCC",
+                "decision_type": "target_weight",
+                "signal": 1,
+                "target_weight": 1.0,
+                "score": 0.7,
+                "rank": 1,
+                "tag": "gamma",
+                "metadata": "{}",
+            },
+        ]
+    )
+    market_returns = pl.DataFrame(
+        [
+            {"time": wed1, "symbol": "AAA", "daily_return": 0.01},
+            {"time": wed1, "symbol": "BBB", "daily_return": 0.0},
+            {"time": wed1, "symbol": "CCC", "daily_return": 0.0},
+            {"time": wed2, "symbol": "AAA", "daily_return": 0.0},
+            {"time": wed2, "symbol": "BBB", "daily_return": 0.02},
+            {"time": wed2, "symbol": "CCC", "daily_return": 0.0},
+            {"time": wed3, "symbol": "AAA", "daily_return": 0.0},
+            {"time": wed3, "symbol": "BBB", "daily_return": 0.0},
+            {"time": wed3, "symbol": "CCC", "daily_return": 0.03},
+        ]
+    )
+    monkeypatch.setattr("app.backtest.runner._load_market_returns", lambda *args, **kwargs: market_returns)
+
+    result = run_backtest(
+        decisions,
+        asset_type="etf_CN",
+        start="2026-05-27",
+        end="2026-06-10",
+        rebalance_frequency="biweekly",
+        rebalance_weekday=2,
+        execution_lag=0,
+    )
+
+    assert result.holdings_df.filter(pl.col("time") == date(2026, 5, 27)).get_column("symbol").to_list() == ["AAA"]
+    assert result.holdings_df.filter(pl.col("time") == date(2026, 6, 3)).get_column("symbol").to_list() == ["AAA"]
+    assert result.holdings_df.filter(pl.col("time") == date(2026, 6, 10)).get_column("symbol").to_list() == ["CCC"]
+
+
 def test_run_strategy_backtest_builds_snapshot_decisions_and_result(monkeypatch: pytest.MonkeyPatch) -> None:
     ts = datetime(2026, 5, 27, tzinfo=timezone.utc)
     snapshot = pl.DataFrame(
@@ -348,7 +425,7 @@ def test_run_strategy_backtest_builds_snapshot_decisions_and_result(monkeypatch:
         profile_name="trend_etf_v1",
         start="2026-05-27",
         end="2026-05-27",
-        rebalance_frequency="weekly",
+        rebalance_frequency="biweekly",
         rebalance_weekday=2,
         execution_lag=0,
     )
@@ -357,3 +434,146 @@ def test_run_strategy_backtest_builds_snapshot_decisions_and_result(monkeypatch:
     assert result.signal_snapshot.height == 2
     assert result.decisions_df.height == 2
     assert result.backtest_result.returns_df.height == 1
+
+
+def test_query_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.cli import query_etf_rotation
+
+    ts = datetime(2026, 5, 30, tzinfo=timezone.utc)
+    snapshot = pl.DataFrame(
+        [
+            {
+                "time": ts,
+                "asset_type": "etf_CN",
+                "signal_mode": "cross_sectional",
+                "symbol": "AAA",
+                "symbol_name": "AAA",
+                "tag": "alpha",
+                "ret_30_rank": 0.9,
+                "ret_30_rank_score": 0.8,
+                "composite_score": 0.8,
+                "label": "strong",
+                "contributors": ["ret_30_rank_strong"],
+                "rank": 1,
+            }
+        ]
+    )
+    decisions = pl.DataFrame(
+        [
+            {
+                "time": ts,
+                "asset_type": "etf_CN",
+                "strategy": "etf_rotation_v1",
+                "strategy_mode": "cross_sectional",
+                "symbol": "AAA",
+                "decision_type": "target_weight",
+                "signal": 1,
+                "target_weight": 1.0,
+                "score": 0.8,
+                "rank": 1,
+                "tag": "alpha",
+                "metadata": json.dumps({"rank": 1, "tag": "alpha", "profile": "trend_etf_v1"}),
+            }
+        ]
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_build_strategy_snapshot(*args, **kwargs):
+        captured["profile_name"] = kwargs["profile_name"]
+        return StrategySnapshotBundle(signal_snapshot=snapshot, decisions=decisions)
+
+    monkeypatch.setattr(query_etf_rotation, "build_strategy_snapshot", _fake_build_strategy_snapshot)
+
+    exit_code = query_etf_rotation.main("2026-05-30", 5, "trend_etf_v1")
+
+    assert exit_code == 0
+    assert captured["profile_name"] == "trend_etf_v1"
+
+
+def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from app.cli import backtest_etf_rotation
+
+    ts = datetime(2026, 5, 30, tzinfo=timezone.utc)
+    signal_snapshot = pl.DataFrame(
+        [
+            {
+                "time": ts,
+                "asset_type": "etf_CN",
+                "signal_mode": "cross_sectional",
+                "symbol": "AAA",
+                "symbol_name": "AAA",
+                "tag": "alpha",
+                "ret_30_rank": 0.9,
+                "ret_30_rank_score": 0.8,
+                "composite_score": 0.8,
+                "label": "strong",
+                "contributors": ["ret_30_rank_strong"],
+                "rank": 1,
+            }
+        ]
+    )
+    decisions = pl.DataFrame(
+        [
+            {
+                "time": ts,
+                "asset_type": "etf_CN",
+                "strategy": "etf_rotation_v1",
+                "strategy_mode": "cross_sectional",
+                "symbol": "AAA",
+                "decision_type": "target_weight",
+                "signal": 1,
+                "target_weight": 1.0,
+                "score": 0.8,
+                "rank": 1,
+                "tag": "alpha",
+                "metadata": json.dumps({"rank": 1, "tag": "alpha", "profile": "trend_etf_v1"}),
+            }
+        ]
+    )
+    returns_df = pl.DataFrame([{"time": date(2026, 5, 30), "return": 0.01, "cost": 0.0, "turnover": 0.0}])
+    holdings_df = pl.DataFrame([{"time": date(2026, 5, 30), "symbol": "AAA", "weight": 1.0}])
+    trades_df = pl.DataFrame([{"time": date(2026, 5, 30), "symbol": "AAA", "turnover": 1.0}])
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_strategy_backtest(strategy, **kwargs):
+        captured["strategy_profile_name"] = strategy.profile_name
+        captured["profile_name"] = kwargs["profile_name"]
+        return StrategyBacktestBundle(
+            signal_snapshot=signal_snapshot,
+            decisions_df=decisions,
+            backtest_result=BacktestResult(
+                holdings_df=holdings_df,
+                trades_df=trades_df,
+                returns_df=returns_df,
+                metrics={"total_return": 0.01},
+                log_path=None,
+                artifacts_dir=None,
+                equity_chart_path=None,
+                artifact_paths=None,
+            ),
+        )
+
+    monkeypatch.setattr(backtest_etf_rotation, "run_strategy_backtest", _fake_run_strategy_backtest)
+
+    exit_code = backtest_etf_rotation.main(
+        "2026-05-30",
+        "2026-05-30",
+        "trend_etf_v1",
+        5,
+        1,
+        2,
+        1,
+        5.0,
+        5.0,
+        "json",
+        "INFO",
+        str(tmp_path),
+        False,
+        False,
+    )
+
+    assert exit_code == 0
+    assert captured["strategy_profile_name"] == "trend_etf_v1"
+    assert captured["profile_name"] == "trend_etf_v1"

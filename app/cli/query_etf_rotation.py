@@ -60,21 +60,21 @@ def _to_strategy_rows(decisions) -> list[dict]:
     return results
 
 
-def main(date: str | None, top_n: int) -> int:
-    strategy = ETFUniverseRotationStrategy(top_n=5, profile_name="trend_etf_v1", max_per_tag=1)
+def main(date: str | None, top_n: int, profile_name: str) -> int:
+    strategy = ETFUniverseRotationStrategy(top_n=5, profile_name=profile_name, max_per_tag=1)
     as_of_date = datetime.strptime(date, "%Y-%m-%d").date() if date else None
     bundle = build_strategy_snapshot(
         strategy,
         start_date=as_of_date,
         end_date=as_of_date,
         asset_type="etf_CN",
-        profile_name="trend_etf_v1",
+        profile_name=profile_name,
         as_of_date=as_of_date,
     )
     payload = {
         "query": {
             "asset_type": "etf_CN",
-            "profile": "trend_etf_v1",
+            "profile": profile_name,
             "strategy": strategy.strategy_name,
             "strategy_mode": strategy.strategy_mode,
             "date": date,
@@ -98,5 +98,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Query ETF CN rotation candidates")
     parser.add_argument("--date", default=None, help="单日查询日期 YYYY-MM-DD")
     parser.add_argument("--top", type=int, default=10, help="返回前 N 名展示结果，默认 10")
+    parser.add_argument("--profile", default="trend_etf_v1", help="ETF signal profile，默认 trend_etf_v1")
     args = parser.parse_args()
-    raise SystemExit(main(args.date, args.top))
+    raise SystemExit(main(args.date, args.top, args.profile))

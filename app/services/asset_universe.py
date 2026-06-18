@@ -39,6 +39,29 @@ def normalize_symbol(symbol: str) -> str:
     return normalized
 
 
+def _infer_cn_exchange(symbol: str) -> str:
+    if len(symbol) != 6 or not symbol.isdigit():
+        return symbol
+
+    if symbol[0] in {"6", "5", "9"}:
+        return f"{symbol}.SH"
+    if symbol[0] in {"4", "8"}:
+        return f"{symbol}.BJ"
+    return f"{symbol}.SZ"
+
+
+def normalize_symbol_for_asset_type(asset_type: str, symbol: str) -> str:
+    normalized_asset_type = normalize_asset_type(asset_type)
+    normalized_symbol = normalize_symbol(symbol)
+    if "." in normalized_symbol:
+        return normalized_symbol
+
+    if normalized_asset_type in {"stock_CN", "etf_CN"}:
+        return _infer_cn_exchange(normalized_symbol)
+
+    return normalized_symbol
+
+
 def _normalize_name(name: str | None) -> str:
     return str(name or "").strip()
 
@@ -143,7 +166,7 @@ def _read_universe_rows(config: AssetTypeConfig, *, universes_dir: Path = UNIVER
         if "asset_type" in row and str(row.get("asset_type", "")).strip():
             raise ValueError(f"universe 文件不应包含 asset_type 列: {path}")
 
-        symbol = normalize_symbol(symbol_raw)
+        symbol = normalize_symbol_for_asset_type(config.asset_type, symbol_raw)
         if symbol in seen:
             raise ValueError(f"universe 文件存在重复 symbol: {symbol} | {path}")
         seen.add(symbol)
@@ -205,7 +228,7 @@ def write_pipeline_universe_rows(
     seen: set[str] = set()
     extra_fieldnames: set[str] = set()
     for row in rows:
-        symbol = normalize_symbol(str(row.get("symbol", "")))
+        symbol = normalize_symbol_for_asset_type(config.asset_type, str(row.get("symbol", "")))
         if symbol in seen:
             raise ValueError(f"写入 universe 时发现重复 symbol: {symbol}")
         seen.add(symbol)

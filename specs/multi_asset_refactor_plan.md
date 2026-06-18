@@ -59,7 +59,7 @@
 1. `config/stock_pool.csv` 只表达股票池，没有资产域信息
 2. `scripts/etl_daily.py` 写死使用 Tushare `daily`
 3. 旧数据接入逻辑曾以 pipeline 命名承载 provider 适配职责，语义不清晰
-4. `app/services/factor_backfill.py` 写死股票抓数逻辑
+4. `app/data_loader/symbol_backfill.py` 写死股票抓数逻辑
 5. 核心表主键仍以 `symbol` 为主，默认 symbol 全局唯一
 6. `signals` / `strategy` 没有资产域边界
 7. 当前“数据获取层”没有抽象成可插拔 provider 接口
@@ -739,7 +739,7 @@ class MarketDataLoader(Protocol):
    - 写入共享 `market.daily`
 
 2. 改造回填逻辑
-   - `factor_backfill` 不再直接调用 `fetch_stock_daily`
+   - `symbol_backfill` 不再直接调用 `fetch_stock_daily`
    - 统一走 `fetch_daily_by_symbol()`
 
 3. 实现 `TushareLoader`
@@ -938,7 +938,7 @@ class MarketDataLoader(Protocol):
 - `app/factors/pipeline/loader.py`
 - `app/factors/pipeline/writer.py`
 - `app/factors/registry.py`
-- `app/services/factor_backfill.py`
+- `app/data_loader/symbol_backfill.py`
 - `app/factors/specs.py`
 
 ## Queries / services

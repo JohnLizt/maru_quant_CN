@@ -20,14 +20,21 @@ sys.path.insert(0, "/app")
 from loguru import logger
 
 from app.factors.pipeline.loader import get_market_dates
-from app.factors.pipeline.runner import run_time_series_factors
+from app.factors.pipeline.runner import run_cross_sectional_factors, run_time_series_factors
 from app.factors.pipeline.validator import (
     get_complete_factor_dates,
     get_missing_factor_symbols,
     validate_factor_completeness,
 )
 from app.factors.pipeline.writer import update_sync_status
-from app.factors.registry import FACTOR_REGISTRY, max_warmup_days, required_market_fields, resolve_factors
+from app.factors.registry import (
+    FACTOR_REGISTRY,
+    cross_sectional_factors,
+    max_warmup_days,
+    required_market_fields,
+    resolve_factors,
+    time_series_factors,
+)
 from app.services.asset_universe import list_asset_types, resolve_pipeline_symbols
 from app.utils.db import get_engine
 
@@ -66,6 +73,8 @@ def _run_for_asset_type(
     start_str = _yyyymmdd(today - timedelta(days=lookback_days))
 
     factors = resolve_factors(factor_names, asset_type=asset_type)
+    ts_factors = time_series_factors(factors)
+    cs_factors = cross_sectional_factors(factors)
     symbols = resolve_pipeline_symbols(asset_type)
     market_dates = get_market_dates(engine, start_str, end_str, asset_type)
 
@@ -117,7 +126,7 @@ def _run_for_asset_type(
         engine=engine,
         asset_type=asset_type,
         symbols=symbols,
-        factors=factors,
+        factors=ts_factors,
         warmup_start=warmup_start,
         end_str=end_str,
         target_dates=set(missing),
@@ -126,6 +135,19 @@ def _run_for_asset_type(
     )
     total_written = run_result.total_written
     errors = list(run_result.errors)
+
+    cross_result = run_cross_sectional_factors(
+        engine=engine,
+        asset_type=asset_type,
+        symbols=symbols,
+        factors=cs_factors,
+        warmup_start=warmup_start,
+        end_str=end_str,
+        target_dates=set(missing),
+        market_fields=market_fields,
+    )
+    total_written += cross_result.total_written
+    errors.extend(cross_result.errors)
 
     validation = validate_factor_completeness(engine, asset_type, missing, symbols, factors)
     if not validation.ok:

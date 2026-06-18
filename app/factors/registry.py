@@ -3,9 +3,24 @@
 """
 from __future__ import annotations
 
-from app.factors.base import BaseFactor
-from app.factors.cross_sectional.cross_sectional import LimitUpFactor
-from app.factors.technical import MACDNormFactor, MACrossGactor, PriceToMA20Factor, RSIFactor
+from app.factors.base import BaseFactor, CrossSectionalFactor, TimeSeriesFactor
+from app.factors.momentum import (
+    Ret10Factor,
+    Ret10RankFactor,
+    Ret20Factor,
+    Ret20RankFactor,
+    Ret30Factor,
+    Ret30RankFactor,
+    Ret60Factor,
+    Ret60RankFactor,
+)
+from app.factors.technical import (
+    MACDNormFactor,
+    MACrossGactor,
+    LimitUpFactor,
+    PriceToMA20Factor,
+    RSIFactor,
+)
 
 
 DEFAULT_FACTORS: list[BaseFactor] = [
@@ -13,6 +28,14 @@ DEFAULT_FACTORS: list[BaseFactor] = [
     MACrossGactor(),
     RSIFactor(),
     MACDNormFactor(),
+    Ret10Factor(),
+    Ret10RankFactor(),
+    Ret20Factor(),
+    Ret20RankFactor(),
+    Ret30Factor(),
+    Ret30RankFactor(),
+    Ret60Factor(),
+    Ret60RankFactor(),
     LimitUpFactor(),
 ]
 
@@ -21,6 +44,14 @@ FACTOR_REGISTRY: dict[str, BaseFactor] = {factor.name: factor for factor in DEFA
 
 def factors_for_asset_type(asset_type: str) -> list[BaseFactor]:
     return [factor for factor in DEFAULT_FACTORS if factor.supports_asset_type(asset_type)]
+
+
+def time_series_factors(factors: list[BaseFactor]) -> list[TimeSeriesFactor]:
+    return [factor for factor in factors if isinstance(factor, TimeSeriesFactor)]
+
+
+def cross_sectional_factors(factors: list[BaseFactor]) -> list[CrossSectionalFactor]:
+    return [factor for factor in factors if isinstance(factor, CrossSectionalFactor)]
 
 
 def resolve_factors(factor_names: list[str] | None = None, *, asset_type: str | None = None) -> list[BaseFactor]:
