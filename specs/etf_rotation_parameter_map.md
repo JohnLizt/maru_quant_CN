@@ -206,6 +206,38 @@
 但在当前 `trend_etf_v1` 下，这些解释标签都不会触发，因为 profile 只包含 `ret_30_rank`。
 当前没有为 `ret_30_rank` 单独定义 contributor 标签，因此默认会落到 `mixed_signal`。
 
+### 3.6 备选实验 Profile
+
+当前代码里额外保留了一个实验用 ETF profile：
+
+- `trend_etf_rsi14`
+- `trend_etf_rsi14_raw`
+
+规则：
+
+- 因子集合：`rsi14`
+- 权重：`rsi14 = 1.0`
+- 归一化：`linear_clip`
+- `clip_lower = 30.0`
+- `clip_upper = 80.0`
+
+说明：
+
+- 这个 profile 不改变当前默认 `trend_etf_v1`
+- 主要用于验证 `rsi14` 作为单因子横截面排序信号在 ETF 轮动里的实际回测表现
+
+`trend_etf_rsi14_raw` 规则：
+
+- 因子集合：`rsi14`
+- 权重：`rsi14 = 1.0`
+- 归一化：`rank_to_unit`
+
+说明：
+
+- 不再使用 `30/80` 截断
+- 直接基于当日全 ETF universe 的 `rsi14` 横截面排名打分
+- 更贴近 `RankIC` 的研究口径
+
 ## 4. Strategy 层
 
 ### 4.1 当前策略类

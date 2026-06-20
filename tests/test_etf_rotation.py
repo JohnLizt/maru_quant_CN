@@ -59,6 +59,78 @@ def test_trend_etf_v1_composite_uses_ret30_rank_score() -> None:
     assert result.get_column("label").to_list()[0] == "strong"
 
 
+def test_trend_etf_rsi14_profile_weights_and_factor_set() -> None:
+    profile = get_signal_profile("trend_etf_rsi14")
+
+    assert profile.factor_names == ["rsi14"]
+    assert profile.signal_mode == "cross_sectional"
+    assert profile.supported_asset_types == ("etf_CN",)
+    rule = profile.factor_rules[0]
+    assert rule.method == "linear_clip"
+    assert rule.weight == 1.0
+    assert rule.clip_lower == 30.0
+    assert rule.clip_upper == 80.0
+
+
+def test_trend_etf_rsi14_composite_uses_rsi14_score() -> None:
+    profile = get_signal_profile("trend_etf_rsi14")
+    df = pl.DataFrame(
+        [
+            {
+                "rsi14": 68.0,
+                "rsi14_score": 0.7,
+            }
+        ]
+    )
+
+    result = apply_composite_score(df, profile)
+
+    assert result.get_column("composite_score").to_list()[0] == pytest.approx(0.7)
+    assert result.get_column("contributors").to_list()[0] == ["rsi_in_healthy_trend_zone"]
+    assert result.get_column("label").to_list()[0] == "strong"
+
+
+def test_trend_etf_rsi14_raw_profile_weights_and_factor_set() -> None:
+    profile = get_signal_profile("trend_etf_rsi14_raw")
+
+    assert profile.factor_names == ["rsi14"]
+    assert profile.signal_mode == "cross_sectional"
+    assert profile.supported_asset_types == ("etf_CN",)
+    rule = profile.factor_rules[0]
+    assert rule.method == "rank_to_unit"
+    assert rule.weight == 1.0
+
+
+def test_trend_etf_rsi14_raw_composite_uses_rsi14_rank_score() -> None:
+    profile = get_signal_profile("trend_etf_rsi14_raw")
+    df = pl.DataFrame(
+        [
+            {
+                "rsi14": 68.0,
+                "rsi14_score": 0.7,
+            }
+        ]
+    )
+
+    result = apply_composite_score(df, profile)
+
+    assert result.get_column("composite_score").to_list()[0] == pytest.approx(0.7)
+    assert result.get_column("contributors").to_list()[0] == ["rsi_in_healthy_trend_zone"]
+    assert result.get_column("label").to_list()[0] == "strong"
+
+
+def test_trend_etf_rsi14_raw_smooth_profile_weights_and_factor_set() -> None:
+    profile = get_signal_profile("trend_etf_rsi14_raw_smooth")
+
+    assert profile.factor_names == ["rsi14"]
+    assert profile.signal_mode == "cross_sectional"
+    assert profile.supported_asset_types == ("etf_CN",)
+    assert profile.score_smoothing_window == 5
+    rule = profile.factor_rules[0]
+    assert rule.method == "rank_to_unit"
+    assert rule.weight == 1.0
+
+
 def test_etf_rotation_strategy_selects_top_n_and_emits_metadata() -> None:
     strategy = ETFUniverseRotationStrategy(top_n=2, profile_name="trend_etf_v1")
     ts = datetime(2026, 5, 30, tzinfo=timezone.utc)

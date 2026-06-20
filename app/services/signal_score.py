@@ -164,6 +164,22 @@ def _filter_to_pipeline_universe(df: pl.DataFrame, asset_type: str) -> pl.DataFr
     return df.filter(pl.col("symbol").is_in(universe_symbols))
 
 
+def _smooth_factor_scores(df: pl.DataFrame, profile: SignalProfile) -> pl.DataFrame:
+    window = profile.score_smoothing_window
+    if window is None or window <= 1:
+        return df
+
+    score_columns = [f"{factor_name}_score" for factor_name in profile.factor_names]
+    smoothed = (
+        df.sort(["symbol", "time"])
+        .with_columns([
+            pl.col(column).rolling_mean(window_size=window, min_samples=1).over("symbol").alias(column)
+            for column in score_columns
+        ])
+    )
+    return smoothed.sort(["time", "symbol"])
+
+
 def build_signal_snapshot(
     symbols: list[str] | None = None,
     start_date: str | date | datetime | None = None,
@@ -188,6 +204,7 @@ def build_signal_snapshot(
         .pipe(_pivot_factors, profile=profile)
         .pipe(_filter_to_pipeline_universe, asset_type=asset_type)
         .pipe(apply_signal_profile, profile=profile)
+        .pipe(_smooth_factor_scores, profile=profile)
         .pipe(apply_composite_score, profile=profile)
         .pipe(_attach_symbol_names, asset_type=asset_type)
         .with_columns(pl.lit(profile.signal_mode).alias("signal_mode"))
