@@ -17,6 +17,7 @@ from app.backtest.reporting import export_backtest_artifacts
 from app.backtest.runner import run_strategy_backtest
 from app.strategy.etf_rotation import ETFUniverseRotationStrategy
 from app.utils.logging import build_timestamped_prefix, configure_task_logger, ensure_log_directories
+from loguru import logger
 
 
 def _to_compact_rows(df, limit: int) -> list[dict]:
@@ -62,6 +63,18 @@ def main(
         file_level=log_level,
         console_level="INFO",
         enable_console=True,
+    )
+    logger.info(
+        "回测启动 | profile={} | asset_type=etf_CN | start={} | end={} | top_n={} | max_per_tag={} | rebalance_frequency=weekly | rebalance_weekday={} | execution_lag={} | commission_bps={} | slippage_bps={}",
+        profile_name,
+        start_date,
+        end_date,
+        top_n,
+        max_per_tag,
+        rebalance_weekday,
+        execution_lag,
+        commission_bps,
+        slippage_bps,
     )
 
     strategy = ETFUniverseRotationStrategy(

@@ -52,6 +52,10 @@ def _rows() -> list[dict[str, object]]:
                     "daily_factors",
                     "factor_daily_ic",
                     "factor_ic_summary",
+                    "factor_daily_quantile_return",
+                    "factor_quantile_summary",
+                    "factor_daily_topk_return",
+                    "factor_topk_summary",
                 ],
             },
         ).fetchall()
@@ -95,7 +99,16 @@ def main(output_format: str) -> None:
     for asset in payload["assets"]:
         print(f"[{asset['asset_type']}]")
         steps = asset["steps"]
-        for data_type in ["daily_market", "daily_factors", "factor_daily_ic", "factor_ic_summary"]:
+        for data_type in [
+            "daily_market",
+            "daily_factors",
+            "factor_daily_ic",
+            "factor_ic_summary",
+            "factor_daily_quantile_return",
+            "factor_quantile_summary",
+            "factor_daily_topk_return",
+            "factor_topk_summary",
+        ]:
             step = steps.get(data_type)
             if step is None:
                 print(f"  {data_type}: missing")

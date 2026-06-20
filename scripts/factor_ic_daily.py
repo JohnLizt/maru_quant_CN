@@ -1,12 +1,12 @@
 """
-Daily incremental factor IC pipeline.
+Daily incremental factor validation pipeline.
 
 Flow:
   1. Resolve enabled asset types and target factors
-  2. Find daily IC dates that are fully computable and still missing
-  3. Compute daily IC / RankIC for lags and upsert to analytics.factor_daily_ic
+  2. Find missing IC / quantile / top-k dates that are fully computable
+  3. Compute daily validations for lags and upsert raw analytics tables
   4. Rebuild 126-day rolling summaries for affected as_of dates
-  5. Update sync status for both raw IC and summary layers
+  5. Update sync status for all validation layers
 """
 from __future__ import annotations
 
@@ -22,18 +22,36 @@ sys.path.insert(0, "/app")
 from app.analytics import (
     CALC_VERSION,
     DEFAULT_LAGS,
+    DEFAULT_QUANTILE_GROUPS,
+    DEFAULT_TOP_KS,
     DEFAULT_WINDOW_DAYS,
     FACTOR_DAILY_IC_DATA_TYPE,
+    FACTOR_DAILY_QUANTILE_RETURN_DATA_TYPE,
+    FACTOR_DAILY_TOPK_RETURN_DATA_TYPE,
     FACTOR_IC_SUMMARY_DATA_TYPE,
+    FACTOR_QUANTILE_SUMMARY_DATA_TYPE,
+    FACTOR_TOPK_SUMMARY_DATA_TYPE,
     compute_daily_ic,
+    compute_daily_quantile_return,
+    compute_daily_topk_return,
     get_complete_ic_dates,
+    get_complete_quantile_dates,
+    get_complete_topk_dates,
     load_daily_ic_rows,
+    load_daily_quantile_rows,
+    load_daily_topk_rows,
     load_factors,
     load_returns,
     summarize_ic_window,
+    summarize_quantile_window,
+    summarize_topk_window,
     update_ic_sync_status,
     upsert_factor_daily_ic,
+    upsert_factor_daily_quantile_return,
+    upsert_factor_daily_topk_return,
     upsert_factor_ic_summary,
+    upsert_factor_quantile_summary,
+    upsert_factor_topk_summary,
 )
 from app.factors.pipeline.loader import get_market_dates
 from app.factors.registry import FACTOR_REGISTRY, resolve_factors
@@ -81,16 +99,50 @@ def _summarize_target_dates(missing: list[str], market_dates: list[str], window_
     return market_dates[start_index : market_dates.index(missing[-1]) + 1]
 
 
+def _update_status_group(
+    engine,
+    *,
+    asset_type: str,
+    status: str,
+    error_msg: str | None,
+    ic_last_date: str | None,
+    ic_summary_last_date: str | None,
+    quantile_last_date: str | None,
+    quantile_summary_last_date: str | None,
+    topk_last_date: str | None,
+    topk_summary_last_date: str | None,
+) -> None:
+    mappings = [
+        (FACTOR_DAILY_IC_DATA_TYPE, ic_last_date),
+        (FACTOR_IC_SUMMARY_DATA_TYPE, ic_summary_last_date),
+        (FACTOR_DAILY_QUANTILE_RETURN_DATA_TYPE, quantile_last_date),
+        (FACTOR_QUANTILE_SUMMARY_DATA_TYPE, quantile_summary_last_date),
+        (FACTOR_DAILY_TOPK_RETURN_DATA_TYPE, topk_last_date),
+        (FACTOR_TOPK_SUMMARY_DATA_TYPE, topk_summary_last_date),
+    ]
+    for data_type, last_date in mappings:
+        update_ic_sync_status(
+            engine,
+            data_type=data_type,
+            asset_type=asset_type,
+            status=status,
+            last_date=last_date,
+            error_msg=error_msg,
+        )
+
+
 def _run_for_asset_type(
     engine,
     *,
     asset_type: str,
     lookback_days: int,
     lags: list[int],
+    quantile_groups: int,
+    top_ks: list[int],
     window_days: int,
     force_update: bool,
     factor_names: list[str] | None,
-) -> tuple[int, int, list[str]]:
+) -> tuple[dict[str, int], list[str]]:
     today = datetime.now(timezone.utc)
     end_str = _yyyymmdd(today)
     start_str = _yyyymmdd(today - timedelta(days=lookback_days))
@@ -101,32 +153,46 @@ def _run_for_asset_type(
 
     market_dates = get_market_dates(engine, start_str, end_str, asset_type)
     if len(market_dates) <= max_lag:
-        logger.warning("[{}] market.daily 交易日不足以计算 IC，跳过", asset_type)
-        update_ic_sync_status(
+        logger.warning("[{}] market.daily 交易日不足以计算因子有效性，跳过", asset_type)
+        _update_status_group(
             engine,
-            data_type=FACTOR_DAILY_IC_DATA_TYPE,
             asset_type=asset_type,
             status="ok",
-            last_date=None,
+            error_msg=None,
+            ic_last_date=None,
+            ic_summary_last_date=None,
+            quantile_last_date=None,
+            quantile_summary_last_date=None,
+            topk_last_date=None,
+            topk_summary_last_date=None,
         )
-        update_ic_sync_status(
-            engine,
-            data_type=FACTOR_IC_SUMMARY_DATA_TYPE,
-            asset_type=asset_type,
-            status="ok",
-            last_date=None,
-        )
-        return 0, 0, []
+        return {
+            "ic_daily_rows": 0,
+            "ic_summary_rows": 0,
+            "quantile_daily_rows": 0,
+            "quantile_summary_rows": 0,
+            "topk_daily_rows": 0,
+            "topk_summary_rows": 0,
+        }, []
 
     target_dates = market_dates[: len(market_dates) - max_lag]
     if not target_dates:
-        logger.warning("[{}] 无可计算的 IC 目标日期，跳过", asset_type)
-        return 0, 0, []
+        logger.warning("[{}] 无可计算的目标日期，跳过", asset_type)
+        return {
+            "ic_daily_rows": 0,
+            "ic_summary_rows": 0,
+            "quantile_daily_rows": 0,
+            "quantile_summary_rows": 0,
+            "topk_daily_rows": 0,
+            "topk_summary_rows": 0,
+        }, []
 
     if force_update:
-        missing = target_dates
+        missing_ic = target_dates
+        missing_quantile = target_dates
+        missing_topk = target_dates
     else:
-        complete_dates = get_complete_ic_dates(
+        complete_ic = get_complete_ic_dates(
             engine,
             asset_type=asset_type,
             factor_names=factor_name_list,
@@ -134,127 +200,279 @@ def _run_for_asset_type(
             start=_iso(target_dates[0]),
             end=_iso(target_dates[-1]),
         )
-        missing = [trade_date for trade_date in target_dates if trade_date not in complete_dates]
+        complete_quantile = get_complete_quantile_dates(
+            engine,
+            asset_type=asset_type,
+            factor_names=factor_name_list,
+            lags=lags,
+            quantile_n=quantile_groups,
+            start=_iso(target_dates[0]),
+            end=_iso(target_dates[-1]),
+        )
+        complete_topk = get_complete_topk_dates(
+            engine,
+            asset_type=asset_type,
+            factor_names=factor_name_list,
+            lags=lags,
+            top_ks=top_ks,
+            start=_iso(target_dates[0]),
+            end=_iso(target_dates[-1]),
+        )
+        missing_ic = [trade_date for trade_date in target_dates if trade_date not in complete_ic]
+        missing_quantile = [trade_date for trade_date in target_dates if trade_date not in complete_quantile]
+        missing_topk = [trade_date for trade_date in target_dates if trade_date not in complete_topk]
 
     logger.info(
-        "[{}] IC 流水线 | dates={} ~ {} | total={} | missing={} | lags={}{}",
+        "[{}] validation 流水线 | dates={} ~ {} | total={} | missing_ic={} | missing_quantile={} | missing_topk={} | lags={}{}",
         asset_type,
         target_dates[0],
         target_dates[-1],
         len(target_dates),
-        len(missing),
+        len(missing_ic),
+        len(missing_quantile),
+        len(missing_topk),
         lags,
         " | FORCE" if force_update else "",
     )
 
-    if not missing:
-        update_ic_sync_status(
+    if not missing_ic and not missing_quantile and not missing_topk:
+        _update_status_group(
             engine,
-            data_type=FACTOR_DAILY_IC_DATA_TYPE,
             asset_type=asset_type,
             status="ok",
-            last_date=target_dates[-1],
+            error_msg=None,
+            ic_last_date=target_dates[-1],
+            ic_summary_last_date=target_dates[-1],
+            quantile_last_date=target_dates[-1],
+            quantile_summary_last_date=target_dates[-1],
+            topk_last_date=target_dates[-1],
+            topk_summary_last_date=target_dates[-1],
         )
-        update_ic_sync_status(
-            engine,
-            data_type=FACTOR_IC_SUMMARY_DATA_TYPE,
-            asset_type=asset_type,
-            status="ok",
-            last_date=target_dates[-1],
-        )
-        logger.success("[{}] factor IC 数据完整，无需补全", asset_type)
-        return 0, 0, []
+        logger.success("[{}] 因子有效性数据完整，无需补全", asset_type)
+        return {
+            "ic_daily_rows": 0,
+            "ic_summary_rows": 0,
+            "quantile_daily_rows": 0,
+            "quantile_summary_rows": 0,
+            "topk_daily_rows": 0,
+            "topk_summary_rows": 0,
+        }, []
 
-    factor_start = _iso(missing[0])
+    load_dates = sorted(set(missing_ic) | set(missing_quantile) | set(missing_topk))
+    factor_start = _iso(load_dates[0])
     factor_end = _iso(target_dates[-1])
     df_factors = load_factors(engine, factor_start, factor_end, asset_type, factor_name_list)
     df_ret = load_returns(engine, factor_start, factor_end, asset_type, max_lag)
     if df_factors.is_empty() or df_ret.is_empty():
-        error = "IC 输入数据为空，请先确认 daily_factors 与 market.daily 完整"
-        update_ic_sync_status(
+        error = "因子有效性输入数据为空，请先确认 daily_factors 与 market.daily 完整"
+        _update_status_group(
             engine,
-            data_type=FACTOR_DAILY_IC_DATA_TYPE,
             asset_type=asset_type,
             status="error",
-            last_date=missing[-1],
             error_msg=error,
+            ic_last_date=load_dates[-1],
+            ic_summary_last_date=load_dates[-1],
+            quantile_last_date=load_dates[-1],
+            quantile_summary_last_date=load_dates[-1],
+            topk_last_date=load_dates[-1],
+            topk_summary_last_date=load_dates[-1],
         )
-        update_ic_sync_status(
-            engine,
-            data_type=FACTOR_IC_SUMMARY_DATA_TYPE,
-            asset_type=asset_type,
-            status="error",
-            last_date=missing[-1],
-            error_msg=error,
-        )
-        return 0, 0, [error]
+        return {
+            "ic_daily_rows": 0,
+            "ic_summary_rows": 0,
+            "quantile_daily_rows": 0,
+            "quantile_summary_rows": 0,
+            "topk_daily_rows": 0,
+            "topk_summary_rows": 0,
+        }, [error]
 
-    target_date_set = set(missing)
-    daily_frames: list[pl.DataFrame] = []
+    ic_date_set = set(missing_ic)
+    quantile_date_set = set(missing_quantile)
+    topk_date_set = set(missing_topk)
+
+    ic_frames: list[pl.DataFrame] = []
+    quantile_frames: list[pl.DataFrame] = []
+    topk_frames: list[pl.DataFrame] = []
+
     for lag in lags:
-        daily_ic = compute_daily_ic(df_factors, df_ret, lag, factor_min_cross_section)
-        if daily_ic.is_empty():
-            continue
-        filtered = (
-            daily_ic.filter(pl.col("time").dt.strftime("%Y%m%d").is_in(target_date_set))
-            .with_columns([
-                pl.lit(asset_type).alias("asset_type"),
-                pl.lit(CALC_VERSION).alias("calc_version"),
-            ])
-            .select(["time", "asset_type", "factor_name", "lag", "ic", "rank_ic", "n_stocks", "calc_version"])
+        if ic_date_set:
+            daily_ic = compute_daily_ic(df_factors, df_ret, lag, factor_min_cross_section)
+            if not daily_ic.is_empty():
+                current_ic = (
+                    daily_ic.filter(pl.col("time").dt.strftime("%Y%m%d").is_in(ic_date_set))
+                    .with_columns([
+                        pl.lit(asset_type).alias("asset_type"),
+                        pl.lit(CALC_VERSION).alias("calc_version"),
+                    ])
+                    .select(["time", "asset_type", "factor_name", "lag", "ic", "rank_ic", "n_stocks", "calc_version"])
+                )
+                if not current_ic.is_empty():
+                    ic_frames.append(current_ic)
+
+        if quantile_date_set:
+            daily_quantile = compute_daily_quantile_return(df_factors, df_ret, lag, quantile_groups, factor_min_cross_section)
+            if not daily_quantile.is_empty():
+                current_quantile = (
+                    daily_quantile.filter(pl.col("time").dt.strftime("%Y%m%d").is_in(quantile_date_set))
+                    .with_columns([
+                        pl.lit(asset_type).alias("asset_type"),
+                        pl.lit(CALC_VERSION).alias("calc_version"),
+                    ])
+                    .select([
+                        "time",
+                        "asset_type",
+                        "factor_name",
+                        "lag",
+                        "quantile_n",
+                        "quantile_id",
+                        "avg_fwd_ret",
+                        "n_stocks",
+                        "calc_version",
+                    ])
+                )
+                if not current_quantile.is_empty():
+                    quantile_frames.append(current_quantile)
+
+        if topk_date_set:
+            daily_topk = compute_daily_topk_return(df_factors, df_ret, lag, top_ks, factor_min_cross_section)
+            if not daily_topk.is_empty():
+                current_topk = (
+                    daily_topk.filter(pl.col("time").dt.strftime("%Y%m%d").is_in(topk_date_set))
+                    .with_columns([
+                        pl.lit(asset_type).alias("asset_type"),
+                        pl.lit(CALC_VERSION).alias("calc_version"),
+                    ])
+                    .select([
+                        "time",
+                        "asset_type",
+                        "factor_name",
+                        "lag",
+                        "top_k",
+                        "topk_ret",
+                        "universe_ret",
+                        "excess_ret",
+                        "n_stocks",
+                        "calc_version",
+                    ])
+                )
+                if not current_topk.is_empty():
+                    topk_frames.append(current_topk)
+
+    ic_daily_rows = upsert_factor_daily_ic(engine, pl.concat(ic_frames) if ic_frames else pl.DataFrame())
+    quantile_daily_rows = upsert_factor_daily_quantile_return(engine, pl.concat(quantile_frames) if quantile_frames else pl.DataFrame())
+    topk_daily_rows = upsert_factor_daily_topk_return(engine, pl.concat(topk_frames) if topk_frames else pl.DataFrame())
+
+    ic_summary_rows = 0
+    quantile_summary_rows = 0
+    topk_summary_rows = 0
+
+    ic_summary_dates = _summarize_target_dates(missing_ic, target_dates, window_days)
+    if ic_summary_dates:
+        ic_summary_start = _window_start(ic_summary_dates[0], window_days)
+        loaded_daily_ic = load_daily_ic_rows(
+            engine,
+            ic_summary_start,
+            _iso(ic_summary_dates[-1]),
+            asset_type,
+            lags=lags,
+            factor_names=factor_name_list,
         )
-        if not filtered.is_empty():
-            daily_frames.append(filtered)
+        if not loaded_daily_ic.is_empty():
+            ic_summary_rows = upsert_factor_ic_summary(
+                engine,
+                summarize_ic_window(
+                    loaded_daily_ic,
+                    asset_type=asset_type,
+                    as_of_dates=[datetime.strptime(value, "%Y%m%d").date() for value in ic_summary_dates],
+                    window_days=window_days,
+                ),
+            )
 
-    daily_rows = upsert_factor_daily_ic(engine, pl.concat(daily_frames) if daily_frames else pl.DataFrame())
-
-    summary_target_dates = _summarize_target_dates(missing, target_dates, window_days)
-    summary_start = _window_start(summary_target_dates[0], window_days) if summary_target_dates else factor_start
-    loaded_daily_ic = load_daily_ic_rows(
-        engine,
-        summary_start,
-        _iso(summary_target_dates[-1]) if summary_target_dates else factor_end,
-        asset_type,
-        lags=lags,
-        factor_names=factor_name_list,
-    )
-    summary_rows = 0
-    if not loaded_daily_ic.is_empty() and summary_target_dates:
-        summary_df = summarize_ic_window(
-            loaded_daily_ic,
-            asset_type=asset_type,
-            as_of_dates=[datetime.strptime(value, "%Y%m%d").date() for value in summary_target_dates],
-            window_days=window_days,
+    quantile_summary_dates = _summarize_target_dates(missing_quantile, target_dates, window_days)
+    if quantile_summary_dates:
+        quantile_summary_start = _window_start(quantile_summary_dates[0], window_days)
+        loaded_daily_quantile = load_daily_quantile_rows(
+            engine,
+            quantile_summary_start,
+            _iso(quantile_summary_dates[-1]),
+            asset_type,
+            lags=lags,
+            factor_names=factor_name_list,
+            quantile_n=quantile_groups,
         )
-        summary_rows = upsert_factor_ic_summary(engine, summary_df)
+        if not loaded_daily_quantile.is_empty():
+            quantile_summary_rows = upsert_factor_quantile_summary(
+                engine,
+                summarize_quantile_window(
+                    loaded_daily_quantile,
+                    asset_type=asset_type,
+                    as_of_dates=[datetime.strptime(value, "%Y%m%d").date() for value in quantile_summary_dates],
+                    window_days=window_days,
+                ),
+            )
 
-    update_ic_sync_status(
+    topk_summary_dates = _summarize_target_dates(missing_topk, target_dates, window_days)
+    if topk_summary_dates:
+        topk_summary_start = _window_start(topk_summary_dates[0], window_days)
+        loaded_daily_topk = load_daily_topk_rows(
+            engine,
+            topk_summary_start,
+            _iso(topk_summary_dates[-1]),
+            asset_type,
+            lags=lags,
+            factor_names=factor_name_list,
+            top_ks=top_ks,
+        )
+        if not loaded_daily_topk.is_empty():
+            topk_summary_rows = upsert_factor_topk_summary(
+                engine,
+                summarize_topk_window(
+                    loaded_daily_topk,
+                    asset_type=asset_type,
+                    as_of_dates=[datetime.strptime(value, "%Y%m%d").date() for value in topk_summary_dates],
+                    window_days=window_days,
+                ),
+            )
+
+    _update_status_group(
         engine,
-        data_type=FACTOR_DAILY_IC_DATA_TYPE,
         asset_type=asset_type,
         status="ok",
-        last_date=missing[-1],
+        error_msg=None,
+        ic_last_date=missing_ic[-1] if missing_ic else target_dates[-1],
+        ic_summary_last_date=ic_summary_dates[-1] if ic_summary_dates else (missing_ic[-1] if missing_ic else target_dates[-1]),
+        quantile_last_date=missing_quantile[-1] if missing_quantile else target_dates[-1],
+        quantile_summary_last_date=quantile_summary_dates[-1] if quantile_summary_dates else (missing_quantile[-1] if missing_quantile else target_dates[-1]),
+        topk_last_date=missing_topk[-1] if missing_topk else target_dates[-1],
+        topk_summary_last_date=topk_summary_dates[-1] if topk_summary_dates else (missing_topk[-1] if missing_topk else target_dates[-1]),
     )
-    update_ic_sync_status(
-        engine,
-        data_type=FACTOR_IC_SUMMARY_DATA_TYPE,
-        asset_type=asset_type,
-        status="ok",
-        last_date=summary_target_dates[-1] if summary_target_dates else missing[-1],
-    )
+
+    counts = {
+        "ic_daily_rows": ic_daily_rows,
+        "ic_summary_rows": ic_summary_rows,
+        "quantile_daily_rows": quantile_daily_rows,
+        "quantile_summary_rows": quantile_summary_rows,
+        "topk_daily_rows": topk_daily_rows,
+        "topk_summary_rows": topk_summary_rows,
+    }
     logger.success(
-        "[{}] factor IC 完成 | daily_rows={} | summary_rows={} | missing_dates={}",
+        "[{}] 因子有效性完成 | ic=({}/{}) | quantile=({}/{}) | topk=({}/{})",
         asset_type,
-        daily_rows,
-        summary_rows,
-        len(missing),
+        ic_daily_rows,
+        ic_summary_rows,
+        quantile_daily_rows,
+        quantile_summary_rows,
+        topk_daily_rows,
+        topk_summary_rows,
     )
-    return daily_rows, summary_rows, []
+    return counts, []
 
 
 def main(
     lookback_days: int,
     lags: list[int],
+    quantile_groups: int,
+    top_ks: list[int],
     window_days: int,
     force_update: bool = False,
     factor_names: list[str] | None = None,
@@ -270,63 +488,65 @@ def main(
         logger.error(str(exc))
         sys.exit(1)
 
-    total_daily_rows = 0
-    total_summary_rows = 0
+    totals = {
+        "ic_daily_rows": 0,
+        "ic_summary_rows": 0,
+        "quantile_daily_rows": 0,
+        "quantile_summary_rows": 0,
+        "topk_daily_rows": 0,
+        "topk_summary_rows": 0,
+    }
     aggregated_errors: list[str] = []
 
     for asset_type in resolved_asset_types:
         try:
-            daily_rows, summary_rows, errors = _run_for_asset_type(
+            counts, errors = _run_for_asset_type(
                 engine,
                 asset_type=asset_type,
                 lookback_days=lookback_days,
                 lags=lags,
+                quantile_groups=quantile_groups,
+                top_ks=top_ks,
                 window_days=window_days,
                 force_update=force_update,
                 factor_names=factor_names,
             )
-            total_daily_rows += daily_rows
-            total_summary_rows += summary_rows
+            for key, value in counts.items():
+                totals[key] += value
             aggregated_errors.extend(f"[{asset_type}] {error}" for error in errors)
         except Exception as exc:
-            logger.error("[{}] factor IC 流水线失败 — {}", asset_type, exc)
-            update_ic_sync_status(
+            logger.error("[{}] 因子有效性流水线失败 — {}", asset_type, exc)
+            _update_status_group(
                 engine,
-                data_type=FACTOR_DAILY_IC_DATA_TYPE,
                 asset_type=asset_type,
                 status="error",
-                last_date=None,
                 error_msg=str(exc),
-            )
-            update_ic_sync_status(
-                engine,
-                data_type=FACTOR_IC_SUMMARY_DATA_TYPE,
-                asset_type=asset_type,
-                status="error",
-                last_date=None,
-                error_msg=str(exc),
+                ic_last_date=None,
+                ic_summary_last_date=None,
+                quantile_last_date=None,
+                quantile_summary_last_date=None,
+                topk_last_date=None,
+                topk_summary_last_date=None,
             )
             aggregated_errors.append(f"[{asset_type}] {exc}")
 
     if aggregated_errors:
         logger.warning(
-            "factor IC 流水线完成（含错误）| asset_types={} | daily_rows={} | summary_rows={}",
+            "因子有效性流水线完成（含错误）| asset_types={} | counts={}",
             resolved_asset_types,
-            total_daily_rows,
-            total_summary_rows,
+            totals,
         )
         sys.exit(1)
 
     logger.success(
-        "factor IC 流水线完成 | asset_types={} | daily_rows={} | summary_rows={}",
+        "因子有效性流水线完成 | asset_types={} | counts={}",
         resolved_asset_types,
-        total_daily_rows,
-        total_summary_rows,
+        totals,
     )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Daily incremental factor IC pipeline")
+    parser = argparse.ArgumentParser(description="Daily incremental factor validation pipeline")
     parser.add_argument(
         "--lookback-days",
         type=int,
@@ -337,6 +557,17 @@ if __name__ == "__main__":
         "--lags",
         default="1,2,5,10,20",
         help=f"逗号分隔的 forward lag，默认 {','.join(str(value) for value in DEFAULT_LAGS)}",
+    )
+    parser.add_argument(
+        "--quantile-groups",
+        type=int,
+        default=DEFAULT_QUANTILE_GROUPS,
+        help=f"分组收益组数，默认 {DEFAULT_QUANTILE_GROUPS}",
+    )
+    parser.add_argument(
+        "--topk",
+        default="5,10,20",
+        help=f"逗号分隔的 Top-K 集合，默认 {','.join(str(value) for value in DEFAULT_TOP_KS)}",
     )
     parser.add_argument(
         "--window-days",
@@ -365,9 +596,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     factor_names = [factor.strip() for factor in args.factors.split(",")] if args.factors else None
     lags = [int(value.strip()) for value in args.lags.split(",") if value.strip()]
+    top_ks = [int(value.strip()) for value in args.topk.split(",") if value.strip()]
     main(
         args.lookback_days,
         lags,
+        args.quantile_groups,
+        top_ks,
         args.window_days,
         args.force_update,
         factor_names,
