@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from app.factors.base import BaseFactor, CrossSectionalFactor, TimeSeriesFactor
 from app.factors.momentum import (
+    MomentumReg20Factor,
+    MomentumReg20RankFactor,
     Ret10Factor,
     Ret10RankFactor,
     Ret20Factor,
@@ -28,6 +30,8 @@ DEFAULT_FACTORS: list[BaseFactor] = [
     MACrossGactor(),
     RSIFactor(),
     MACDNormFactor(),
+    MomentumReg20Factor(),
+    MomentumReg20RankFactor(),
     Ret10Factor(),
     Ret10RankFactor(),
     Ret20Factor(),

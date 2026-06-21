@@ -228,6 +228,26 @@ TREND_ETF_RET20_PURE_PROFILE = SignalProfile(
     weak_threshold=-0.5,
 )
 
+TREND_ETF_MOMENTUM_REG20_PURE_PROFILE = SignalProfile(
+    name="trend_etf_momentum_reg20_pure",
+    signal_mode="cross_sectional",
+    normalization_scope="full_universe",
+    supported_asset_types=("etf_CN",),
+    factor_rules=(
+        FactorScoreRule(
+            factor_name="momentum_reg_20_rank",
+            method="linear_clip",
+            weight=1.0,
+            clip_lower=0.0,
+            clip_upper=1.0,
+        ),
+    ),
+    strong_threshold=0.5,
+    positive_threshold=0.15,
+    neutral_lower_threshold=-0.15,
+    weak_threshold=-0.5,
+)
+
 
 SIGNAL_PROFILES: dict[str, SignalProfile] = {
     TREND_V1_PROFILE.name: TREND_V1_PROFILE,
@@ -237,6 +257,7 @@ SIGNAL_PROFILES: dict[str, SignalProfile] = {
     TREND_ETF_RSI14_RAW_SMOOTH_PROFILE.name: TREND_ETF_RSI14_RAW_SMOOTH_PROFILE,
     TREND_ETF_RET10_PURE_PROFILE.name: TREND_ETF_RET10_PURE_PROFILE,
     TREND_ETF_RET20_PURE_PROFILE.name: TREND_ETF_RET20_PURE_PROFILE,
+    TREND_ETF_MOMENTUM_REG20_PURE_PROFILE.name: TREND_ETF_MOMENTUM_REG20_PURE_PROFILE,
     TREND_ETF_RET30_PURE_PROFILE.name: TREND_ETF_RET30_PURE_PROFILE,
 }
 
