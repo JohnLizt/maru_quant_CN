@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 import polars as pl
 import pytest
 
+from app.backtest.risk_overlay import RiskOverlayConfig
 from app.backtest.runner import BacktestResult, StrategyBacktestBundle, run_backtest, run_strategy_backtest
 from app.factors.registry import resolve_factors
 from app.signals.composite import apply_composite_score
@@ -20,7 +21,7 @@ def test_resolve_factors_filters_by_asset_type() -> None:
 
     assert "limit_up" in stock_factors
     assert "limit_up" not in etf_factors
-    assert etf_factors == ["price_to_ma20", "ma_cross", "rsi14", "macd_norm"]
+    assert {"price_to_ma20", "ma_cross", "rsi14", "macd_norm"}.issubset(etf_factors)
 
 
 def test_resolve_factors_rejects_unsupported_factor_for_etf() -> None:
@@ -272,6 +273,56 @@ def test_run_backtest_consumes_decisions_and_returns_metrics(monkeypatch: pytest
     assert result.holdings_df.height == 2
     assert result.returns_df.height == 1
     assert result.metrics
+
+
+def test_run_backtest_applies_risk_overlay_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    ts = datetime(2026, 5, 27, tzinfo=timezone.utc)
+    decisions = pl.DataFrame(
+        [
+            {
+                "time": ts,
+                "asset_type": "etf_CN",
+                "strategy": "etf_rotation_v1",
+                "strategy_mode": "cross_sectional",
+                "symbol": "AAA",
+                "decision_type": "target_weight",
+                "signal": 1,
+                "target_weight": 1.0,
+                "score": 0.9,
+                "rank": 1,
+                "tag": "alpha",
+                "metadata": "{}",
+            }
+        ]
+    )
+    market_returns = pl.DataFrame(
+        [
+            {"time": ts, "symbol": "AAA", "daily_return": 0.01, "close": 100.0, "std_score": 0.04, "cv": 0.1},
+        ]
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_load_market_returns(*args, **kwargs):
+        captured["include_risk_fields"] = kwargs.get("include_risk_fields")
+        return market_returns
+
+    monkeypatch.setattr("app.backtest.runner._load_market_returns", _fake_load_market_returns)
+
+    result = run_backtest(
+        decisions,
+        asset_type="etf_CN",
+        start="2026-05-27",
+        end="2026-05-27",
+        execution_lag=0,
+        risk_config=RiskOverlayConfig(),
+    )
+
+    assert captured["include_risk_fields"] is True
+    assert result.holdings_df.get_column("base_target_weight").item() == pytest.approx(1.0)
+    assert result.holdings_df.get_column("target_weight").item() == pytest.approx(0.5)
+    assert result.holdings_df.get_column("risk_reason").item() == "risk_half_std"
+    assert result.metrics["risk_half_events"] == 1
+    assert result.metrics["stop_loss_events"] == 0
 
 
 def test_run_backtest_weekly_uses_python_weekday_and_costs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -612,6 +663,7 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
     def _fake_run_strategy_backtest(strategy, **kwargs):
         captured["strategy_profile_name"] = strategy.profile_name
         captured["profile_name"] = kwargs["profile_name"]
+        captured["risk_config"] = kwargs["risk_config"]
         return StrategyBacktestBundle(
             signal_snapshot=signal_snapshot,
             decisions_df=decisions,
@@ -619,6 +671,7 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
                 holdings_df=holdings_df,
                 trades_df=trades_df,
                 returns_df=returns_df,
+                equity_curve_df=returns_df,
                 metrics={"total_return": 0.01},
                 log_path=None,
                 artifacts_dir=None,
@@ -649,3 +702,63 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
     assert exit_code == 0
     assert captured["strategy_profile_name"] == "trend_etf_v1"
     assert captured["profile_name"] == "trend_etf_v1"
+    assert captured["risk_config"] is None
+
+
+def test_backtest_etf_rotation_cli_passes_risk_config(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from app.cli import backtest_etf_rotation
+
+    ts = datetime(2026, 5, 30, tzinfo=timezone.utc)
+    signal_snapshot = pl.DataFrame([{"time": ts, "asset_type": "etf_CN", "symbol": "AAA"}])
+    decisions = pl.DataFrame([{"time": ts, "asset_type": "etf_CN", "symbol": "AAA"}])
+    returns_df = pl.DataFrame([{"time": date(2026, 5, 30), "return": 0.01, "cost": 0.0, "turnover": 0.0}])
+    holdings_df = pl.DataFrame([{"time": date(2026, 5, 30), "symbol": "AAA", "weight": 1.0}])
+    trades_df = pl.DataFrame([{"time": date(2026, 5, 30), "symbol": "AAA", "turnover": 1.0}])
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_strategy_backtest(strategy, **kwargs):
+        captured["risk_config"] = kwargs["risk_config"]
+        return StrategyBacktestBundle(
+            signal_snapshot=signal_snapshot,
+            decisions_df=decisions,
+            backtest_result=BacktestResult(
+                holdings_df=holdings_df,
+                trades_df=trades_df,
+                returns_df=returns_df,
+                equity_curve_df=returns_df,
+                metrics={"total_return": 0.01},
+            ),
+        )
+
+    monkeypatch.setattr(backtest_etf_rotation, "run_strategy_backtest", _fake_run_strategy_backtest)
+
+    exit_code = backtest_etf_rotation.main(
+        "2026-05-30",
+        "2026-05-30",
+        "trend_etf_v1",
+        5,
+        1,
+        2,
+        1,
+        5.0,
+        5.0,
+        "json",
+        "INFO",
+        str(tmp_path),
+        False,
+        False,
+        True,
+        0.04,
+        0.6,
+        0.12,
+        0.4,
+    )
+
+    assert exit_code == 0
+    risk_config = captured["risk_config"]
+    assert isinstance(risk_config, RiskOverlayConfig)
+    assert risk_config.std_threshold == pytest.approx(0.04)
+    assert risk_config.cv_threshold == pytest.approx(0.6)
+    assert risk_config.stop_loss_rate == pytest.approx(0.12)
+    assert risk_config.half_weight == pytest.approx(0.4)

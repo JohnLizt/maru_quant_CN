@@ -10,6 +10,7 @@ from loguru import logger
 from sqlalchemy import text
 
 from app.backtest.metrics import compute_metrics
+from app.backtest.risk_overlay import RiskOverlayConfig, apply_risk_overlay
 from app.services.strategy_service import StrategySnapshotBundle, build_strategy_snapshot
 from app.strategy.base import BaseStrategy
 from app.utils.db import get_engine
@@ -43,10 +44,17 @@ def _normalize_date(value: str | date | datetime) -> date:
     return datetime.strptime(str(value), "%Y-%m-%d").date()
 
 
-def _load_market_returns(asset_type: str, start_date: date, end_date: date) -> pl.DataFrame:
+def _load_market_returns(
+    asset_type: str,
+    start_date: date,
+    end_date: date,
+    *,
+    include_risk_fields: bool = False,
+) -> pl.DataFrame:
+    selected_columns = "time, symbol, pct_change, close, amount" if include_risk_fields else "time, symbol, pct_change"
     sql = text(
-        """
-        SELECT time, symbol, pct_change
+        f"""
+        SELECT {selected_columns}
         FROM market.daily
         WHERE asset_type = :asset_type
           AND time >= :start_date
@@ -65,15 +73,69 @@ def _load_market_returns(asset_type: str, start_date: date, end_date: date) -> p
         ).fetchall()
 
     if not rows:
+        schema = {"time": pl.Datetime("us", "UTC"), "symbol": pl.Utf8, "daily_return": pl.Float64}
+        if include_risk_fields:
+            schema.update({"close": pl.Float64, "amount": pl.Float64})
+        return pl.DataFrame(schema=schema)
+
+    if include_risk_fields:
         return pl.DataFrame(
-            schema={"time": pl.Datetime("us", "UTC"), "symbol": pl.Utf8, "daily_return": pl.Float64}
-        )
+            rows,
+            schema=["time", "symbol", "pct_change", "close", "amount"],
+            orient="row",
+        ).with_columns(
+            [
+                (pl.col("pct_change").cast(pl.Float64) / 100.0).alias("daily_return"),
+                pl.col("close").cast(pl.Float64),
+                pl.col("amount").cast(pl.Float64),
+            ]
+        ).select(["time", "symbol", "daily_return", "close", "amount"]).sort(["time", "symbol"])
 
     return (
         pl.DataFrame(rows, schema=["time", "symbol", "pct_change"], orient="row")
         .with_columns((pl.col("pct_change").cast(pl.Float64) / 100.0).alias("daily_return"))
         .select(["time", "symbol", "daily_return"])
         .sort(["time", "symbol"])
+    )
+
+
+def _empty_holdings_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "time": pl.Date,
+            "symbol": pl.Utf8,
+            "target_weight": pl.Float64,
+            "score": pl.Float64,
+            "strategy": pl.Utf8,
+            "rank": pl.UInt32,
+            "tag": pl.Utf8,
+            "metadata": pl.Utf8,
+            "holding_start_date": pl.Date,
+        }
+    )
+
+
+def _empty_trades_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "time": pl.Date,
+            "symbol": pl.Utf8,
+            "target_weight": pl.Float64,
+            "prev_weight": pl.Float64,
+            "delta_weight": pl.Float64,
+        }
+    )
+
+
+def _empty_returns_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "time": pl.Date,
+            "gross_return": pl.Float64,
+            "turnover": pl.Float64,
+            "cost": pl.Float64,
+            "net_return": pl.Float64,
+        }
     )
 
 
@@ -137,35 +199,13 @@ def _build_effective_holdings(
         & (pl.col("time").dt.date() <= pl.lit(end_date))
     ).sort(["time", "rank", "symbol"])
     if filtered.is_empty():
-        empty = pl.DataFrame(
-            schema={
-                "time": pl.Date,
-                "symbol": pl.Utf8,
-                "target_weight": pl.Float64,
-                "score": pl.Float64,
-                "strategy": pl.Utf8,
-                "rank": pl.UInt32,
-                "tag": pl.Utf8,
-                "metadata": pl.Utf8,
-            }
-        )
+        empty = _empty_holdings_frame()
         return empty, empty
 
     decision_dates = sorted({value for value in filtered.get_column("time").dt.date().to_list() if value is not None})
     effective_date_map = _resolve_effective_dates(decision_dates, trading_dates, execution_lag)
     if not effective_date_map:
-        empty = pl.DataFrame(
-            schema={
-                "time": pl.Date,
-                "symbol": pl.Utf8,
-                "target_weight": pl.Float64,
-                "score": pl.Float64,
-                "strategy": pl.Utf8,
-                "rank": pl.UInt32,
-                "tag": pl.Utf8,
-                "metadata": pl.Utf8,
-            }
-        )
+        empty = _empty_holdings_frame()
         return empty, empty
 
     effective_frames: list[pl.DataFrame] = []
@@ -189,7 +229,11 @@ def _build_effective_holdings(
         ]
         if not active_dates:
             continue
-        current_holdings = effective_decisions.filter(pl.col("effective_date") == pl.lit(effective_date)).drop(["time", "effective_date"]).rename({"target_weight": "decision_target_weight"})
+        current_holdings = (
+            effective_decisions.filter(pl.col("effective_date") == pl.lit(effective_date))
+            .drop(["time"])
+            .rename({"target_weight": "decision_target_weight", "effective_date": "holding_start_date"})
+        )
         logger.debug(
             "调仓日 {} 持仓列表: {}",
             effective_date,
@@ -220,7 +264,15 @@ def _build_trades(holdings_df: pl.DataFrame) -> pl.DataFrame:
             schema={"time": pl.Date, "symbol": pl.Utf8, "target_weight": pl.Float64, "prev_weight": pl.Float64, "delta_weight": pl.Float64}
         )
 
-    daily_weights = holdings_df.select(["time", "symbol", "target_weight"]).unique().sort(["symbol", "time"])
+    dates = holdings_df.select("time").unique().sort("time")
+    symbols = holdings_df.select("symbol").unique().sort("symbol")
+    target_weights = holdings_df.select(["time", "symbol", "target_weight"]).unique()
+    daily_weights = (
+        dates.join(symbols, how="cross")
+        .join(target_weights, on=["time", "symbol"], how="left")
+        .with_columns(pl.col("target_weight").fill_null(0.0))
+        .sort(["symbol", "time"])
+    )
     return (
         daily_weights.with_columns(pl.col("target_weight").shift(1).over("symbol").fill_null(0.0).alias("prev_weight"))
         .with_columns((pl.col("target_weight") - pl.col("prev_weight")).alias("delta_weight"))
@@ -240,6 +292,7 @@ def run_backtest(
     execution_lag: int = 1,
     commission_bps: float = 0.0,
     slippage_bps: float = 0.0,
+    risk_config: RiskOverlayConfig | None = None,
 ) -> BacktestResult:
     """Run a generic backtest from StrategyDecisionTable rows."""
 
@@ -250,7 +303,7 @@ def run_backtest(
     if execution_lag < 0:
         raise ValueError("execution_lag 不能小于 0")
     logger.info(
-        "开始回测 | asset_type={} | start={} | end={} | rebalance_frequency={} | rebalance_weekday={} | execution_lag={} | commission_bps={} | slippage_bps={}",
+        "开始回测 | asset_type={} | start={} | end={} | rebalance_frequency={} | rebalance_weekday={} | execution_lag={} | commission_bps={} | slippage_bps={} | risk_control={}",
         asset_type,
         start_date,
         end_date,
@@ -259,6 +312,7 @@ def run_backtest(
         execution_lag,
         commission_bps,
         slippage_bps,
+        risk_config is not None,
     )
 
     required_columns = {
@@ -284,13 +338,9 @@ def run_backtest(
     logger.info("输入 decision 行数: {} | 过滤后调仓 decision 行数: {}", decisions.height, filtered.height)
     if filtered.is_empty():
         logger.warning("无可用调仓 decision，返回空回测结果")
-        empty_holdings = pl.DataFrame(
-            schema={"time": pl.Date, "symbol": pl.Utf8, "target_weight": pl.Float64, "score": pl.Float64, "strategy": pl.Utf8, "rank": pl.UInt32, "tag": pl.Utf8, "metadata": pl.Utf8}
-        )
-        empty_trades = pl.DataFrame(
-            schema={"time": pl.Date, "symbol": pl.Utf8, "target_weight": pl.Float64, "prev_weight": pl.Float64, "delta_weight": pl.Float64}
-        )
-        empty_returns = pl.DataFrame(schema={"time": pl.Date, "gross_return": pl.Float64, "turnover": pl.Float64, "cost": pl.Float64, "net_return": pl.Float64})
+        empty_holdings = _empty_holdings_frame()
+        empty_trades = _empty_trades_frame()
+        empty_returns = _empty_returns_frame()
         return BacktestResult(
             holdings_df=empty_holdings,
             trades_df=empty_trades,
@@ -299,7 +349,12 @@ def run_backtest(
             metrics={},
         )
 
-    market_returns = _load_market_returns(asset_type, start_date, end_date)
+    market_returns = _load_market_returns(
+        asset_type,
+        start_date,
+        end_date,
+        include_risk_fields=risk_config is not None,
+    )
     logger.info("市场收益记录数: {}", market_returns.height)
     trading_dates = sorted({current for current in market_returns.get_column("time").dt.date().to_list() if current is not None})
     effective_decisions, holdings_df = _build_effective_holdings(
@@ -317,16 +372,23 @@ def run_backtest(
 
     if holdings_df.is_empty():
         logger.warning("无有效持仓展开结果，返回空回测结果")
-        empty_trades = pl.DataFrame(
-            schema={"time": pl.Date, "symbol": pl.Utf8, "target_weight": pl.Float64, "prev_weight": pl.Float64, "delta_weight": pl.Float64}
-        )
-        empty_returns = pl.DataFrame(schema={"time": pl.Date, "gross_return": pl.Float64, "turnover": pl.Float64, "cost": pl.Float64, "net_return": pl.Float64})
+        empty_trades = _empty_trades_frame()
+        empty_returns = _empty_returns_frame()
         return BacktestResult(
             holdings_df=holdings_df,
             trades_df=empty_trades,
             returns_df=empty_returns,
             equity_curve_df=empty_returns,
             metrics={},
+        )
+
+    risk_metrics: dict[str, int] = {}
+    if risk_config is not None:
+        holdings_df, risk_metrics = apply_risk_overlay(holdings_df, market_returns, risk_config)
+        logger.info(
+            "风控 overlay 完成 | risk_half_events={} | stop_loss_events={}",
+            risk_metrics.get("risk_half_events", 0),
+            risk_metrics.get("stop_loss_events", 0),
         )
 
     holdings_for_join = holdings_df.with_columns(pl.col("time").cast(pl.Datetime("us", "UTC")))
@@ -366,6 +428,8 @@ def run_backtest(
         equity_curve_df.get_column("net_return"),
         freq="daily",
     ) if equity_curve_df.height else {}
+    if risk_config is not None:
+        metrics.update(risk_metrics)
     logger.success("回测完成 | metrics={}", metrics)
 
     return BacktestResult(
@@ -394,6 +458,7 @@ def run_strategy_backtest(
     artifacts_dir: str | None = None,
     equity_chart_path: str | None = None,
     snapshot_kwargs: dict[str, Any] | None = None,
+    risk_config: RiskOverlayConfig | None = None,
 ) -> StrategyBacktestBundle:
     """Build signal snapshot + strategy decisions, then run backtest."""
 
@@ -416,6 +481,7 @@ def run_strategy_backtest(
         execution_lag=execution_lag,
         commission_bps=commission_bps,
         slippage_bps=slippage_bps,
+        risk_config=risk_config,
     )
     result.log_path = log_path
     result.artifacts_dir = artifacts_dir

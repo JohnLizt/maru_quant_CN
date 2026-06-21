@@ -14,6 +14,7 @@ for candidate in ["/app", str(REPO_ROOT)]:
         sys.path.insert(0, candidate)
 
 from app.backtest.reporting import export_backtest_artifacts
+from app.backtest.risk_overlay import RiskOverlayConfig
 from app.backtest.runner import run_strategy_backtest
 from app.strategy.etf_rotation import ETFUniverseRotationStrategy
 from app.utils.logging import build_timestamped_prefix, configure_task_logger, ensure_log_directories
@@ -51,6 +52,11 @@ def main(
     output_dir: str,
     save_artifacts: bool,
     save_chart: bool,
+    risk_control: bool = False,
+    risk_std_threshold: float = 0.03,
+    risk_cv_threshold: float = 0.5,
+    stop_loss_rate: float = 0.10,
+    risk_half_weight: float = 0.5,
 ) -> int:
     ensure_log_directories("logs")
     output_root = Path(output_dir)
@@ -65,7 +71,7 @@ def main(
         enable_console=True,
     )
     logger.info(
-        "回测启动 | profile={} | asset_type=etf_CN | start={} | end={} | top_n={} | max_per_tag={} | rebalance_frequency=weekly | rebalance_weekday={} | execution_lag={} | commission_bps={} | slippage_bps={}",
+        "回测启动 | profile={} | asset_type=etf_CN | start={} | end={} | top_n={} | max_per_tag={} | rebalance_frequency=weekly | rebalance_weekday={} | execution_lag={} | commission_bps={} | slippage_bps={} | risk_control={}",
         profile_name,
         start_date,
         end_date,
@@ -75,12 +81,23 @@ def main(
         execution_lag,
         commission_bps,
         slippage_bps,
+        risk_control,
     )
 
     strategy = ETFUniverseRotationStrategy(
         top_n=top_n,
         profile_name=profile_name,
         max_per_tag=max_per_tag,
+    )
+    risk_config = (
+        RiskOverlayConfig(
+            std_threshold=risk_std_threshold,
+            cv_threshold=risk_cv_threshold,
+            stop_loss_rate=stop_loss_rate,
+            half_weight=risk_half_weight,
+        )
+        if risk_control
+        else None
     )
     bundle = run_strategy_backtest(
         strategy,
@@ -95,6 +112,7 @@ def main(
         slippage_bps=slippage_bps,
         log_path=str(log_path),
         artifacts_dir=str(run_dir),
+        risk_config=risk_config,
     )
 
     backtest_result = bundle.backtest_result
@@ -127,6 +145,11 @@ def main(
             "commission_bps": commission_bps,
             "slippage_bps": slippage_bps,
             "log_level": log_level.upper(),
+            "risk_control": risk_control,
+            "risk_std_threshold": risk_std_threshold,
+            "risk_cv_threshold": risk_cv_threshold,
+            "stop_loss_rate": stop_loss_rate,
+            "risk_half_weight": risk_half_weight,
         },
         "snapshot_rows": bundle.signal_snapshot.height,
         "decision_rows": bundle.decisions_df.height,
@@ -152,13 +175,14 @@ def main(
     print(f"window: {start_date} -> {end_date}")
     print(f"strategy: {strategy.strategy_name} | profile: {profile_name}")
     print(
-        "weekly rebalance: weekday={} | top_n={} | max_per_tag={} | execution_lag={} | commission_bps={} | slippage_bps={}".format(
+        "weekly rebalance: weekday={} | top_n={} | max_per_tag={} | execution_lag={} | commission_bps={} | slippage_bps={} | risk_control={}".format(
             rebalance_weekday,
             top_n,
             max_per_tag,
             execution_lag,
             commission_bps,
             slippage_bps,
+            risk_control,
         )
     )
     print(
@@ -193,6 +217,11 @@ if __name__ == "__main__":
     parser.add_argument("--execution-lag", type=int, default=1, help="信号到执行的交易日延迟，默认 1")
     parser.add_argument("--commission-bps", type=float, default=5.0, help="单边手续费 bps，默认 5")
     parser.add_argument("--slippage-bps", type=float, default=5.0, help="单边滑点 bps，默认 5")
+    parser.add_argument("--risk-control", action="store_true", help="启用 ETF 风险过滤/半仓/止损 overlay，默认关闭")
+    parser.add_argument("--risk-std-threshold", type=float, default=0.03, help="风险过滤波动率阈值，默认 0.03")
+    parser.add_argument("--risk-cv-threshold", type=float, default=0.5, help="成交额 CV 阈值，默认 0.5")
+    parser.add_argument("--stop-loss-rate", type=float, default=0.10, help="持仓周期止损阈值，默认 0.10")
+    parser.add_argument("--risk-half-weight", type=float, default=0.5, help="触发风险过滤后的权重乘数，默认 0.5")
     parser.add_argument("--log-level", default="DEBUG", help="文件日志级别，默认 DEBUG")
     parser.add_argument("--output-dir", default="logs/backtest", help="回测产物输出目录，默认 logs/backtest")
     parser.add_argument("--save-artifacts", dest="save_artifacts", action="store_true", help="保存 CSV/图表产物（默认开启）")
@@ -220,5 +249,10 @@ if __name__ == "__main__":
             args.output_dir,
             args.save_artifacts,
             args.save_chart,
+            args.risk_control,
+            args.risk_std_threshold,
+            args.risk_cv_threshold,
+            args.stop_loss_rate,
+            args.risk_half_weight,
         )
     )

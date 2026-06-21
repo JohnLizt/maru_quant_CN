@@ -51,6 +51,7 @@ COPY app/ ./app/
 COPY config/ ./config/
 COPY scripts/ ./scripts/
 COPY notebooks/ ./notebooks/
+COPY tests/ ./tests/
 
 # ── 创建数据目录 ──────────────────────────────────────────────
 RUN mkdir -p /app/qlib_data /app/data /app/logs

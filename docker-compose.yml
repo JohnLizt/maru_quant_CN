@@ -99,6 +99,7 @@ services:
       - ./notebooks:/app/notebooks
       - ./config:/app/config
       - ./scripts:/app/scripts
+      - ./tests:/app/tests
       - ./logs:/app/logs            # ETL 日志持久化
       - qlib_data:/app/qlib_data
     depends_on:
@@ -140,6 +141,7 @@ services:
       - ./app:/app/app
       - ./notebooks:/app/notebooks
       - ./config:/app/config
+      - ./tests:/app/tests
       - qlib_data:/app/qlib_data
     ports:
       - "${JUPYTER_PORT:-8888}:8888"
