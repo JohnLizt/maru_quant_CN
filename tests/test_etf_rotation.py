@@ -15,6 +15,32 @@ from app.services.strategy_service import StrategySnapshotBundle, build_strategy
 from app.strategy.etf_rotation import ETFUniverseRotationStrategy
 
 
+def _market_bar(
+    ts: datetime,
+    symbol: str,
+    *,
+    asset_type: str = "etf_CN",
+    open_price: float,
+    high_price: float,
+    low_price: float,
+    close_price: float,
+    amount: float = 1000.0,
+) -> dict[str, object]:
+    ohlc4 = (open_price + high_price + low_price + close_price) / 4.0
+    return {
+        "time": ts.date(),
+        "asset_type": asset_type,
+        "symbol": symbol,
+        "open": open_price,
+        "high": high_price,
+        "low": low_price,
+        "close": close_price,
+        "amount": amount,
+        "daily_return": 0.0,
+        "ohlc4": ohlc4,
+    }
+
+
 def test_resolve_factors_filters_by_asset_type() -> None:
     stock_factors = [factor.name for factor in resolve_factors(asset_type="stock_CN")]
     etf_factors = [factor.name for factor in resolve_factors(asset_type="etf_CN")]
@@ -254,13 +280,13 @@ def test_run_backtest_consumes_decisions_and_returns_metrics(monkeypatch: pytest
             },
         ]
     )
-    market_returns = pl.DataFrame(
+    market_data = pl.DataFrame(
         [
-            {"time": ts, "symbol": "518880.SH", "daily_return": 0.01},
-            {"time": ts, "symbol": "512000.SH", "daily_return": 0.02},
+            _market_bar(ts, "518880.SH", open_price=2.0, high_price=2.1, low_price=1.9, close_price=2.05),
+            _market_bar(ts, "512000.SH", open_price=4.0, high_price=4.1, low_price=3.9, close_price=4.10),
         ]
     )
-    monkeypatch.setattr("app.backtest.runner._load_market_returns", lambda *args, **kwargs: market_returns)
+    monkeypatch.setattr("app.backtest.runner._load_market_data", lambda *args, **kwargs: market_data)
     result = run_backtest(
         decisions,
         asset_type="etf_CN",
@@ -271,8 +297,10 @@ def test_run_backtest_consumes_decisions_and_returns_metrics(monkeypatch: pytest
 
     assert isinstance(result, BacktestResult)
     assert result.holdings_df.height == 2
+    assert result.trades_df.height == 2
     assert result.returns_df.height == 1
-    assert result.metrics
+    assert result.metrics["initial_capital"] == pytest.approx(40000.0)
+    assert result.metrics["end_nav"] > 0
 
 
 def test_run_backtest_applies_risk_overlay_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -295,18 +323,18 @@ def test_run_backtest_applies_risk_overlay_when_enabled(monkeypatch: pytest.Monk
             }
         ]
     )
-    market_returns = pl.DataFrame(
+    market_data = pl.DataFrame(
         [
-            {"time": ts, "symbol": "AAA", "daily_return": 0.01, "close": 100.0, "std_score": 0.04, "cv": 0.1},
+            _market_bar(ts, "AAA", open_price=100.0, high_price=101.0, low_price=99.0, close_price=100.0),
+        ]
+    ).with_columns(
+        [
+            pl.lit(0.04).alias("std_score"),
+            pl.lit(0.1).alias("cv"),
         ]
     )
-    captured: dict[str, object] = {}
-
-    def _fake_load_market_returns(*args, **kwargs):
-        captured["include_risk_fields"] = kwargs.get("include_risk_fields")
-        return market_returns
-
-    monkeypatch.setattr("app.backtest.runner._load_market_returns", _fake_load_market_returns)
+    monkeypatch.setattr("app.backtest.runner._load_market_data", lambda *args, **kwargs: market_data)
+    monkeypatch.setattr("app.backtest.runner.build_risk_features", lambda df, *_args, **_kwargs: df)
 
     result = run_backtest(
         decisions,
@@ -317,12 +345,13 @@ def test_run_backtest_applies_risk_overlay_when_enabled(monkeypatch: pytest.Monk
         risk_config=RiskOverlayConfig(),
     )
 
-    assert captured["include_risk_fields"] is True
-    assert result.holdings_df.get_column("base_target_weight").item() == pytest.approx(1.0)
-    assert result.holdings_df.get_column("target_weight").item() == pytest.approx(0.5)
-    assert result.holdings_df.get_column("risk_reason").item() == "risk_half_std"
-    assert result.metrics["risk_half_events"] == 1
-    assert result.metrics["stop_loss_events"] == 0
+    assert result.trades_df.height == 1
+    trade = result.trades_df.row(0, named=True)
+    assert trade["action"] == "调仓买入"
+    assert trade["risk_reason"] == "risk_half_std"
+    assert result.holdings_df.get_column("risk_half_triggered").item() is True
+    assert result.metrics["risk_half_events"] == pytest.approx(1.0)
+    assert result.metrics["stop_loss_events"] == pytest.approx(0.0)
 
 
 def test_run_backtest_weekly_uses_python_weekday_and_costs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -403,20 +432,20 @@ def test_run_backtest_weekly_uses_python_weekday_and_costs(monkeypatch: pytest.M
             },
         ]
     )
-    market_returns = pl.DataFrame(
+    market_data = pl.DataFrame(
         [
-            {"time": wed, "symbol": "AAA", "daily_return": 0.01},
-            {"time": wed, "symbol": "BBB", "daily_return": 0.02},
-            {"time": wed, "symbol": "DDD", "daily_return": 0.00},
-            {"time": thu, "symbol": "AAA", "daily_return": 0.00},
-            {"time": thu, "symbol": "BBB", "daily_return": 0.01},
-            {"time": thu, "symbol": "DDD", "daily_return": 0.00},
-            {"time": next_wed, "symbol": "AAA", "daily_return": -0.01},
-            {"time": next_wed, "symbol": "BBB", "daily_return": 0.00},
-            {"time": next_wed, "symbol": "DDD", "daily_return": 0.03},
+            _market_bar(wed, "AAA", open_price=10.0, high_price=10.2, low_price=9.8, close_price=10.1),
+            _market_bar(wed, "BBB", open_price=10.0, high_price=10.2, low_price=9.8, close_price=10.2),
+            _market_bar(wed, "DDD", open_price=10.0, high_price=10.0, low_price=10.0, close_price=10.0),
+            _market_bar(thu, "AAA", open_price=10.0, high_price=10.0, low_price=10.0, close_price=10.0),
+            _market_bar(thu, "BBB", open_price=10.0, high_price=10.2, low_price=9.8, close_price=10.1),
+            _market_bar(thu, "DDD", open_price=10.0, high_price=10.0, low_price=10.0, close_price=10.0),
+            _market_bar(next_wed, "AAA", open_price=9.8, high_price=9.9, low_price=9.7, close_price=9.8),
+            _market_bar(next_wed, "BBB", open_price=10.0, high_price=10.0, low_price=10.0, close_price=10.0),
+            _market_bar(next_wed, "DDD", open_price=10.2, high_price=10.4, low_price=10.0, close_price=10.3),
         ]
     )
-    monkeypatch.setattr("app.backtest.runner._load_market_returns", lambda *args, **kwargs: market_returns)
+    monkeypatch.setattr("app.backtest.runner._load_market_data", lambda *args, **kwargs: market_data)
 
     result = run_backtest(
         decisions,
@@ -432,10 +461,12 @@ def test_run_backtest_weekly_uses_python_weekday_and_costs(monkeypatch: pytest.M
 
     assert result.holdings_df.filter(pl.col("time") == date(2026, 5, 28)).get_column("symbol").to_list() == ["AAA", "BBB"]
     assert "CCC" not in result.holdings_df.get_column("symbol").to_list()
-    first_cost = result.returns_df.filter(pl.col("time") == date(2026, 5, 27)).get_column("cost").item()
-    second_turnover = result.returns_df.filter(pl.col("time") == date(2026, 6, 3)).get_column("turnover").item()
-    assert first_cost == pytest.approx(0.001)
-    assert second_turnover == pytest.approx(1.0)
+    first_day = result.returns_df.filter(pl.col("time") == date(2026, 5, 27)).row(0, named=True)
+    second_rebalance = result.returns_df.filter(pl.col("time") == date(2026, 6, 3)).row(0, named=True)
+    assert first_day["cost"] > 0
+    assert second_rebalance["turnover"] > 0
+    assert result.trades_df.filter(pl.col("action") == "调仓卖出").height == 1
+    assert result.trades_df.filter(pl.col("action") == "调仓买入").height == 3
 
 
 def test_run_backtest_biweekly_keeps_every_other_weekday(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -488,20 +519,20 @@ def test_run_backtest_biweekly_keeps_every_other_weekday(monkeypatch: pytest.Mon
             },
         ]
     )
-    market_returns = pl.DataFrame(
+    market_data = pl.DataFrame(
         [
-            {"time": wed1, "symbol": "AAA", "daily_return": 0.01},
-            {"time": wed1, "symbol": "BBB", "daily_return": 0.0},
-            {"time": wed1, "symbol": "CCC", "daily_return": 0.0},
-            {"time": wed2, "symbol": "AAA", "daily_return": 0.0},
-            {"time": wed2, "symbol": "BBB", "daily_return": 0.02},
-            {"time": wed2, "symbol": "CCC", "daily_return": 0.0},
-            {"time": wed3, "symbol": "AAA", "daily_return": 0.0},
-            {"time": wed3, "symbol": "BBB", "daily_return": 0.0},
-            {"time": wed3, "symbol": "CCC", "daily_return": 0.03},
+            _market_bar(wed1, "AAA", open_price=10.0, high_price=10.1, low_price=9.9, close_price=10.1),
+            _market_bar(wed1, "BBB", open_price=10.0, high_price=10.0, low_price=10.0, close_price=10.0),
+            _market_bar(wed1, "CCC", open_price=10.0, high_price=10.0, low_price=10.0, close_price=10.0),
+            _market_bar(wed2, "AAA", open_price=10.0, high_price=10.0, low_price=10.0, close_price=10.0),
+            _market_bar(wed2, "BBB", open_price=10.2, high_price=10.3, low_price=10.1, close_price=10.2),
+            _market_bar(wed2, "CCC", open_price=10.0, high_price=10.0, low_price=10.0, close_price=10.0),
+            _market_bar(wed3, "AAA", open_price=10.0, high_price=10.0, low_price=10.0, close_price=10.0),
+            _market_bar(wed3, "BBB", open_price=10.0, high_price=10.0, low_price=10.0, close_price=10.0),
+            _market_bar(wed3, "CCC", open_price=10.3, high_price=10.5, low_price=10.1, close_price=10.3),
         ]
     )
-    monkeypatch.setattr("app.backtest.runner._load_market_returns", lambda *args, **kwargs: market_returns)
+    monkeypatch.setattr("app.backtest.runner._load_market_data", lambda *args, **kwargs: market_data)
 
     result = run_backtest(
         decisions,
@@ -518,6 +549,72 @@ def test_run_backtest_biweekly_keeps_every_other_weekday(monkeypatch: pytest.Mon
     assert result.holdings_df.filter(pl.col("time") == date(2026, 6, 10)).get_column("symbol").to_list() == ["CCC"]
 
 
+def test_run_backtest_stop_loss_can_reenter_on_same_rebalance_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    d1 = datetime(2026, 5, 27, tzinfo=timezone.utc)
+    d2 = datetime(2026, 5, 28, tzinfo=timezone.utc)
+    decisions = pl.DataFrame(
+        [
+            {
+                "time": d1,
+                "asset_type": "etf_CN",
+                "strategy": "etf_rotation_v1",
+                "strategy_mode": "cross_sectional",
+                "symbol": "AAA",
+                "decision_type": "target_weight",
+                "signal": 1,
+                "target_weight": 1.0,
+                "score": 0.9,
+                "rank": 1,
+                "tag": "alpha",
+                "metadata": "{}",
+            },
+            {
+                "time": d2,
+                "asset_type": "etf_CN",
+                "strategy": "etf_rotation_v1",
+                "strategy_mode": "cross_sectional",
+                "symbol": "AAA",
+                "decision_type": "target_weight",
+                "signal": 1,
+                "target_weight": 1.0,
+                "score": 0.95,
+                "rank": 1,
+                "tag": "alpha",
+                "metadata": "{}",
+            },
+        ]
+    )
+    market_data = pl.DataFrame(
+        [
+            _market_bar(d1, "AAA", open_price=100.0, high_price=100.0, low_price=100.0, close_price=100.0),
+            _market_bar(d2, "AAA", open_price=88.0, high_price=88.0, low_price=88.0, close_price=88.0),
+        ]
+    ).with_columns(
+        [
+            pl.lit(0.0).alias("std_score"),
+            pl.lit(0.0).alias("cv"),
+        ]
+    )
+    monkeypatch.setattr("app.backtest.runner._load_market_data", lambda *args, **kwargs: market_data)
+    monkeypatch.setattr("app.backtest.runner.build_risk_features", lambda df, *_args, **_kwargs: df)
+
+    result = run_backtest(
+        decisions,
+        asset_type="etf_CN",
+        start="2026-05-27",
+        end="2026-05-28",
+        rebalance_frequency="daily",
+        execution_lag=0,
+        risk_config=RiskOverlayConfig(stop_loss_rate=0.1),
+    )
+
+    same_day_actions = result.trades_df.filter(pl.col("time") == date(2026, 5, 28)).get_column("action").to_list()
+    assert same_day_actions == ["止损", "调仓买入"]
+    latest_holding = result.holdings_df.filter(pl.col("time") == date(2026, 5, 28)).row(0, named=True)
+    assert latest_holding["symbol"] == "AAA"
+    assert latest_holding["buy_date"] == date(2026, 5, 28)
+
+
 def test_run_strategy_backtest_builds_snapshot_decisions_and_result(monkeypatch: pytest.MonkeyPatch) -> None:
     ts = datetime(2026, 5, 27, tzinfo=timezone.utc)
     snapshot = pl.DataFrame(
@@ -526,10 +623,10 @@ def test_run_strategy_backtest_builds_snapshot_decisions_and_result(monkeypatch:
             {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "BBB", "symbol_name": "BBB", "tag": "beta", "rsi14": 58.0, "price_to_ma20": 0.01, "macd_norm": 0.00, "ma_cross": 0.00, "rsi14_score": 0.6, "price_to_ma20_score": 0.4, "macd_norm_score": 0.1, "ma_cross_score": 0.1, "composite_score": 0.6, "label": "positive", "contributors": ["mixed_signal"], "rank": 2},
         ]
     )
-    market_returns = pl.DataFrame(
+    market_data = pl.DataFrame(
         [
-            {"time": ts, "symbol": "AAA", "daily_return": 0.01},
-            {"time": ts, "symbol": "BBB", "daily_return": 0.02},
+            _market_bar(ts, "AAA", open_price=10.0, high_price=10.1, low_price=9.9, close_price=10.1),
+            _market_bar(ts, "BBB", open_price=10.0, high_price=10.2, low_price=9.8, close_price=10.2),
         ]
     )
     monkeypatch.setattr(
@@ -539,7 +636,7 @@ def test_run_strategy_backtest_builds_snapshot_decisions_and_result(monkeypatch:
             decisions=args[0].build_decisions(snapshot),
         ),
     )
-    monkeypatch.setattr("app.backtest.runner._load_market_returns", lambda *args, **kwargs: market_returns)
+    monkeypatch.setattr("app.backtest.runner._load_market_data", lambda *args, **kwargs: market_data)
 
     strategy = ETFUniverseRotationStrategy(top_n=2, profile_name="trend_etf_v1", max_per_tag=1)
     result = run_strategy_backtest(
@@ -604,6 +701,7 @@ def test_query_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPatch)
 
     def _fake_build_strategy_snapshot(*args, **kwargs):
         captured["profile_name"] = kwargs["profile_name"]
+        captured["asset_type"] = kwargs["asset_type"]
         return StrategySnapshotBundle(signal_snapshot=snapshot, decisions=decisions)
 
     monkeypatch.setattr(query_etf_rotation, "build_strategy_snapshot", _fake_build_strategy_snapshot)
@@ -612,6 +710,7 @@ def test_query_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPatch)
 
     assert exit_code == 0
     assert captured["profile_name"] == "trend_etf_v1"
+    assert captured["asset_type"] == "etf_CN"
 
 
 def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -654,15 +753,16 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
             }
         ]
     )
-    returns_df = pl.DataFrame([{"time": date(2026, 5, 30), "return": 0.01, "cost": 0.0, "turnover": 0.0}])
-    holdings_df = pl.DataFrame([{"time": date(2026, 5, 30), "symbol": "AAA", "weight": 1.0}])
-    trades_df = pl.DataFrame([{"time": date(2026, 5, 30), "symbol": "AAA", "turnover": 1.0}])
+    returns_df = pl.DataFrame([{"time": date(2026, 5, 30), "nav": 40000.0, "cash": 0.0, "cash_ratio": 0.0, "gross_return": 0.01, "cost": 0.0, "turnover": 0.0, "net_return": 0.01}])
+    holdings_df = pl.DataFrame([{"time": date(2026, 5, 30), "asset_type": "etf_CN", "symbol": "AAA", "shares": 1.0, "close": 10.0, "market_value": 10.0, "weight": 1.0, "buy_price": 10.0, "buy_date": date(2026, 5, 30), "risk_half_triggered": False, "strategy": "etf_rotation_v1", "score": 0.8, "rank": 1, "tag": "alpha", "metadata": "{}"}])
+    trades_df = pl.DataFrame([{"time": date(2026, 5, 30), "asset_type": "etf_CN", "symbol": "AAA", "action": "调仓买入", "side": "buy", "price": 10.0, "shares": 1.0, "notional": 10.0, "fee": 0.0, "cash_before": 40000.0, "cash_after": 39990.0, "nav_after_trade": 40000.0, "signal_date": date(2026, 5, 30), "risk_reason": ""}])
 
     captured: dict[str, object] = {}
 
     def _fake_run_strategy_backtest(strategy, **kwargs):
         captured["strategy_profile_name"] = strategy.profile_name
         captured["profile_name"] = kwargs["profile_name"]
+        captured["asset_type"] = kwargs["asset_type"]
         captured["risk_config"] = kwargs["risk_config"]
         return StrategyBacktestBundle(
             signal_snapshot=signal_snapshot,
@@ -671,7 +771,7 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
                 holdings_df=holdings_df,
                 trades_df=trades_df,
                 returns_df=returns_df,
-                equity_curve_df=returns_df,
+                equity_curve_df=pl.DataFrame([{"time": date(2026, 5, 30), "gross_return": 0.01, "turnover": 0.0, "cost": 0.0, "net_return": 0.01, "equity_curve": 1.01}]),
                 metrics={"total_return": 0.01},
                 log_path=None,
                 artifacts_dir=None,
@@ -702,6 +802,7 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
     assert exit_code == 0
     assert captured["strategy_profile_name"] == "trend_etf_v1"
     assert captured["profile_name"] == "trend_etf_v1"
+    assert captured["asset_type"] == "etf_CN"
     assert captured["risk_config"] is None
 
 
@@ -711,9 +812,9 @@ def test_backtest_etf_rotation_cli_passes_risk_config(monkeypatch: pytest.Monkey
     ts = datetime(2026, 5, 30, tzinfo=timezone.utc)
     signal_snapshot = pl.DataFrame([{"time": ts, "asset_type": "etf_CN", "symbol": "AAA"}])
     decisions = pl.DataFrame([{"time": ts, "asset_type": "etf_CN", "symbol": "AAA"}])
-    returns_df = pl.DataFrame([{"time": date(2026, 5, 30), "return": 0.01, "cost": 0.0, "turnover": 0.0}])
-    holdings_df = pl.DataFrame([{"time": date(2026, 5, 30), "symbol": "AAA", "weight": 1.0}])
-    trades_df = pl.DataFrame([{"time": date(2026, 5, 30), "symbol": "AAA", "turnover": 1.0}])
+    returns_df = pl.DataFrame([{"time": date(2026, 5, 30), "nav": 40000.0, "cash": 0.0, "cash_ratio": 0.0, "gross_return": 0.01, "cost": 0.0, "turnover": 0.0, "net_return": 0.01}])
+    holdings_df = pl.DataFrame([{"time": date(2026, 5, 30), "asset_type": "etf_CN", "symbol": "AAA", "shares": 1.0, "close": 10.0, "market_value": 10.0, "weight": 1.0, "buy_price": 10.0, "buy_date": date(2026, 5, 30), "risk_half_triggered": False, "strategy": "etf_rotation_v1", "score": 0.8, "rank": 1, "tag": "alpha", "metadata": "{}"}])
+    trades_df = pl.DataFrame([{"time": date(2026, 5, 30), "asset_type": "etf_CN", "symbol": "AAA", "action": "调仓买入", "side": "buy", "price": 10.0, "shares": 1.0, "notional": 10.0, "fee": 0.0, "cash_before": 40000.0, "cash_after": 39990.0, "nav_after_trade": 40000.0, "signal_date": date(2026, 5, 30), "risk_reason": ""}])
 
     captured: dict[str, object] = {}
 
@@ -726,7 +827,7 @@ def test_backtest_etf_rotation_cli_passes_risk_config(monkeypatch: pytest.Monkey
                 holdings_df=holdings_df,
                 trades_df=trades_df,
                 returns_df=returns_df,
-                equity_curve_df=returns_df,
+                equity_curve_df=pl.DataFrame([{"time": date(2026, 5, 30), "gross_return": 0.01, "turnover": 0.0, "cost": 0.0, "net_return": 0.01, "equity_curve": 1.01}]),
                 metrics={"total_return": 0.01},
             ),
         )
@@ -753,6 +854,9 @@ def test_backtest_etf_rotation_cli_passes_risk_config(monkeypatch: pytest.Monkey
         0.6,
         0.12,
         0.4,
+        50000.0,
+        1.0,
+        0.02,
     )
 
     assert exit_code == 0

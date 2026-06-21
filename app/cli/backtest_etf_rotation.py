@@ -1,4 +1,4 @@
-"""Run ETF CN rotation backtests from the strategy layer."""
+"""Run ETF rotation backtests from the strategy layer."""
 from __future__ import annotations
 
 import argparse
@@ -57,6 +57,9 @@ def main(
     risk_cv_threshold: float = 0.5,
     stop_loss_rate: float = 0.10,
     risk_half_weight: float = 0.5,
+    initial_capital: float = 40000.0,
+    commission_min: float = 0.01,
+    cash_interest_rate: float = 0.01,
 ) -> int:
     ensure_log_directories("logs")
     output_root = Path(output_dir)
@@ -71,7 +74,7 @@ def main(
         enable_console=True,
     )
     logger.info(
-        "回测启动 | profile={} | asset_type=etf_CN | start={} | end={} | top_n={} | max_per_tag={} | rebalance_frequency=weekly | rebalance_weekday={} | execution_lag={} | commission_bps={} | slippage_bps={} | risk_control={}",
+        "回测启动 | profile={} | asset_type=etf_CN | start={} | end={} | top_n={} | max_per_tag={} | rebalance_frequency=weekly | rebalance_weekday={} | execution_lag={} | commission_bps={} | slippage_bps={} | risk_control={} | initial_capital={} | commission_min={} | cash_interest_rate={}",
         profile_name,
         start_date,
         end_date,
@@ -82,6 +85,9 @@ def main(
         commission_bps,
         slippage_bps,
         risk_control,
+        initial_capital,
+        commission_min,
+        cash_interest_rate,
     )
 
     strategy = ETFUniverseRotationStrategy(
@@ -113,6 +119,9 @@ def main(
         log_path=str(log_path),
         artifacts_dir=str(run_dir),
         risk_config=risk_config,
+        initial_capital=initial_capital,
+        commission_min=commission_min,
+        cash_interest_rate=cash_interest_rate,
     )
 
     backtest_result = bundle.backtest_result
@@ -150,6 +159,9 @@ def main(
             "risk_cv_threshold": risk_cv_threshold,
             "stop_loss_rate": stop_loss_rate,
             "risk_half_weight": risk_half_weight,
+            "initial_capital": initial_capital,
+            "commission_min": commission_min,
+            "cash_interest_rate": cash_interest_rate,
         },
         "snapshot_rows": bundle.signal_snapshot.height,
         "decision_rows": bundle.decisions_df.height,
@@ -175,7 +187,7 @@ def main(
     print(f"window: {start_date} -> {end_date}")
     print(f"strategy: {strategy.strategy_name} | profile: {profile_name}")
     print(
-        "weekly rebalance: weekday={} | top_n={} | max_per_tag={} | execution_lag={} | commission_bps={} | slippage_bps={} | risk_control={}".format(
+        "weekly rebalance: weekday={} | top_n={} | max_per_tag={} | execution_lag={} | commission_bps={} | slippage_bps={} | risk_control={} | initial_capital={} | commission_min={} | cash_interest_rate={}".format(
             rebalance_weekday,
             top_n,
             max_per_tag,
@@ -183,6 +195,9 @@ def main(
             commission_bps,
             slippage_bps,
             risk_control,
+            initial_capital,
+            commission_min,
+            cash_interest_rate,
         )
     )
     print(
@@ -207,7 +222,7 @@ def main(
 
 if __name__ == "__main__":
     default_end = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    parser = argparse.ArgumentParser(description="Run ETF CN weekly rotation backtest")
+    parser = argparse.ArgumentParser(description="Run ETF weekly rotation backtest")
     parser.add_argument("--start-date", default="2023-06-03", help="开始日期 YYYY-MM-DD")
     parser.add_argument("--end-date", default=default_end, help="结束日期 YYYY-MM-DD")
     parser.add_argument("--profile", default="trend_etf_v1", help="ETF signal profile，默认 trend_etf_v1")
@@ -222,6 +237,9 @@ if __name__ == "__main__":
     parser.add_argument("--risk-cv-threshold", type=float, default=0.5, help="成交额 CV 阈值，默认 0.5")
     parser.add_argument("--stop-loss-rate", type=float, default=0.10, help="持仓周期止损阈值，默认 0.10")
     parser.add_argument("--risk-half-weight", type=float, default=0.5, help="触发风险过滤后的权重乘数，默认 0.5")
+    parser.add_argument("--initial-capital", type=float, default=40000.0, help="初始资金，默认 40000")
+    parser.add_argument("--commission-min", type=float, default=0.01, help="单笔最低佣金，默认 0.01")
+    parser.add_argument("--cash-interest-rate", type=float, default=0.01, help="现金年化利率，默认 0.01")
     parser.add_argument("--log-level", default="DEBUG", help="文件日志级别，默认 DEBUG")
     parser.add_argument("--output-dir", default="logs/backtest", help="回测产物输出目录，默认 logs/backtest")
     parser.add_argument("--save-artifacts", dest="save_artifacts", action="store_true", help="保存 CSV/图表产物（默认开启）")
@@ -254,5 +272,8 @@ if __name__ == "__main__":
             args.risk_cv_threshold,
             args.stop_loss_rate,
             args.risk_half_weight,
+            args.initial_capital,
+            args.commission_min,
+            args.cash_interest_rate,
         )
     )
