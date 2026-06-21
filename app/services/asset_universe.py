@@ -1,4 +1,4 @@
-"""Asset-type registry and pipeline universe configuration helpers."""
+"""Asset-type and universe registry helpers."""
 from __future__ import annotations
 
 import csv
@@ -11,6 +11,7 @@ CONFIG_DIR = Path("/app/config")
 if not CONFIG_DIR.exists():
     CONFIG_DIR = _REPO_ROOT / "config"
 ASSET_TYPES_CSV = CONFIG_DIR / "asset_types.csv"
+UNIVERSES_CSV = CONFIG_DIR / "universes.csv"
 UNIVERSES_DIR = CONFIG_DIR / "universes"
 
 
@@ -25,10 +26,24 @@ class AssetTypeConfig:
     enabled: bool
 
 
+@dataclass(frozen=True)
+class UniverseConfig:
+    universe: str
+    display_name: str
+    enabled: bool
+
+
 def normalize_asset_type(asset_type: str) -> str:
     normalized = asset_type.strip()
     if not normalized:
         raise ValueError("asset_type 不能为空")
+    return normalized
+
+
+def normalize_universe(universe: str) -> str:
+    normalized = universe.strip()
+    if not normalized:
+        raise ValueError("universe 不能为空")
     return normalized
 
 
@@ -42,7 +57,6 @@ def normalize_symbol(symbol: str) -> str:
 def _infer_cn_exchange(symbol: str) -> str:
     if len(symbol) != 6 or not symbol.isdigit():
         return symbol
-
     if symbol[0] in {"6", "5", "9"}:
         return f"{symbol}.SH"
     if symbol[0] in {"4", "8"}:
@@ -55,10 +69,8 @@ def normalize_symbol_for_asset_type(asset_type: str, symbol: str) -> str:
     normalized_symbol = normalize_symbol(symbol)
     if "." in normalized_symbol:
         return normalized_symbol
-
     if normalized_asset_type in {"stock_CN", "etf_CN"}:
         return _infer_cn_exchange(normalized_symbol)
-
     return normalized_symbol
 
 
@@ -84,7 +96,6 @@ def _parse_bool(raw: str | bool | None, *, field_name: str) -> bool:
 def _read_csv_rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         raise FileNotFoundError(f"配置文件不存在: {path}")
-
     with path.open("r", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
 
@@ -95,9 +106,8 @@ def _asset_type_from_row(row: dict[str, str]) -> AssetTypeConfig:
     data_source = str(row.get("data_source", "")).strip()
     calendar_key = str(row.get("calendar_key", "")).strip()
     loader_key = str(row.get("loader_key", "")).strip()
-    pipeline_universe = str(row.get("pipeline_universe", "")).strip()
+    pipeline_universe = normalize_universe(str(row.get("pipeline_universe", "")))
     enabled = _parse_bool(row.get("enabled"), field_name="enabled")
-
     if not display_name:
         raise ValueError(f"asset_types.csv 配置缺少 display_name: {asset_type}")
     if not data_source:
@@ -106,9 +116,6 @@ def _asset_type_from_row(row: dict[str, str]) -> AssetTypeConfig:
         raise ValueError(f"asset_types.csv 配置缺少 calendar_key: {asset_type}")
     if not loader_key:
         raise ValueError(f"asset_types.csv 配置缺少 loader_key: {asset_type}")
-    if not pipeline_universe:
-        raise ValueError(f"asset_types.csv 配置缺少 pipeline_universe: {asset_type}")
-
     return AssetTypeConfig(
         asset_type=asset_type,
         display_name=display_name,
@@ -120,11 +127,19 @@ def _asset_type_from_row(row: dict[str, str]) -> AssetTypeConfig:
     )
 
 
+def _universe_from_row(row: dict[str, str]) -> UniverseConfig:
+    universe = normalize_universe(str(row.get("universe", "")))
+    display_name = _normalize_name(row.get("display_name"))
+    enabled = _parse_bool(row.get("enabled"), field_name="enabled")
+    if not display_name:
+        raise ValueError(f"universes.csv 配置缺少 display_name: {universe}")
+    return UniverseConfig(universe=universe, display_name=display_name, enabled=enabled)
+
+
 def list_asset_types(*, enabled_only: bool = True, path: Path = ASSET_TYPES_CSV) -> list[AssetTypeConfig]:
     rows = _read_csv_rows(path)
     configs: list[AssetTypeConfig] = []
     seen: set[str] = set()
-
     for row in rows:
         config = _asset_type_from_row(row)
         if config.asset_type in seen:
@@ -133,10 +148,8 @@ def list_asset_types(*, enabled_only: bool = True, path: Path = ASSET_TYPES_CSV)
         if enabled_only and not config.enabled:
             continue
         configs.append(config)
-
     if enabled_only and not configs:
         raise ValueError("asset_types.csv 中没有 enabled=true 的 asset_type")
-
     return sorted(configs, key=lambda item: item.asset_type)
 
 
@@ -148,69 +161,305 @@ def get_asset_type_config(asset_type: str, *, path: Path = ASSET_TYPES_CSV) -> A
     raise ValueError(f"未知 asset_type: {normalized}")
 
 
-def _resolve_universe_path(config: AssetTypeConfig, universes_dir: Path = UNIVERSES_DIR) -> Path:
-    return universes_dir / f"{config.pipeline_universe}.csv"
+def list_universes(*, enabled_only: bool = True, path: Path = UNIVERSES_CSV) -> list[UniverseConfig]:
+    rows = _read_csv_rows(path)
+    configs: list[UniverseConfig] = []
+    seen: set[str] = set()
+    for row in rows:
+        config = _universe_from_row(row)
+        if config.universe in seen:
+            raise ValueError(f"universes.csv 存在重复 universe: {config.universe}")
+        seen.add(config.universe)
+        if enabled_only and not config.enabled:
+            continue
+        configs.append(config)
+    if enabled_only and not configs:
+        raise ValueError("universes.csv 中没有 enabled=true 的 universe")
+    return sorted(configs, key=lambda item: item.universe)
 
 
-def _read_universe_rows(config: AssetTypeConfig, *, universes_dir: Path = UNIVERSES_DIR) -> list[dict[str, str]]:
-    path = _resolve_universe_path(config, universes_dir)
+def get_universe_config(universe: str, *, path: Path = UNIVERSES_CSV) -> UniverseConfig:
+    normalized = normalize_universe(universe)
+    for config in list_universes(enabled_only=False, path=path):
+        if config.universe == normalized:
+            return config
+    raise ValueError(f"未知 universe: {normalized}")
+
+
+def _resolve_universe_path(universe: str, universes_dir: Path = UNIVERSES_DIR) -> Path:
+    return universes_dir / f"{normalize_universe(universe)}.csv"
+
+
+def _infer_row_asset_type(default_asset_type: str | None, raw_asset_type: str | None) -> str:
+    explicit = str(raw_asset_type or "").strip()
+    if explicit:
+        return normalize_asset_type(explicit)
+    if default_asset_type is None:
+        raise ValueError("universe 成员缺少 asset_type 列")
+    return normalize_asset_type(default_asset_type)
+
+
+def _read_universe_rows(
+    universe: str,
+    *,
+    universes_path: Path = UNIVERSES_CSV,
+    universes_dir: Path = UNIVERSES_DIR,
+    default_asset_type: str | None = None,
+) -> list[dict[str, str]]:
+    get_universe_config(universe, path=universes_path)
+    path = _resolve_universe_path(universe, universes_dir)
     rows = _read_csv_rows(path)
 
     normalized_rows: list[dict[str, str]] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for row in rows:
         symbol_raw = str(row.get("symbol", "")).strip()
         if not symbol_raw:
             raise ValueError(f"universe 文件存在空 symbol: {path}")
-
-        if "asset_type" in row and str(row.get("asset_type", "")).strip():
-            raise ValueError(f"universe 文件不应包含 asset_type 列: {path}")
-
-        symbol = normalize_symbol_for_asset_type(config.asset_type, symbol_raw)
-        if symbol in seen:
-            raise ValueError(f"universe 文件存在重复 symbol: {symbol} | {path}")
-        seen.add(symbol)
+        asset_type = _infer_row_asset_type(default_asset_type, row.get("asset_type"))
+        symbol = normalize_symbol_for_asset_type(asset_type, symbol_raw)
+        key = (asset_type, symbol)
+        if key in seen:
+            raise ValueError(f"universe 文件存在重复成员: {asset_type}:{symbol} | {path}")
+        seen.add(key)
 
         is_active = _parse_bool(row.get("is_active", "true"), field_name="is_active")
         normalized_row = {
+            "asset_type": asset_type,
             "symbol": symbol,
             "name": _normalize_name(row.get("name")),
             "is_active": "true" if is_active else "false",
         }
-        for key, value in row.items():
-            if key in {"symbol", "name", "is_active"}:
+        for key_name, value in row.items():
+            if key_name in {"asset_type", "symbol", "name", "is_active"}:
                 continue
-            normalized_row[str(key).strip()] = _normalize_tag(value)
+            normalized_row[str(key_name).strip()] = _normalize_tag(value)
         normalized_rows.append(normalized_row)
 
     if not normalized_rows:
         raise ValueError(f"universe 文件为空: {path}")
-
     return normalized_rows
 
 
-def load_pipeline_universe(asset_type: str, *, universes_dir: Path = UNIVERSES_DIR, path: Path = ASSET_TYPES_CSV) -> list[dict[str, str]]:
-    config = get_asset_type_config(asset_type, path=path)
-    rows = _read_universe_rows(config, universes_dir=universes_dir)
+def load_universe(
+    universe: str,
+    *,
+    universes_path: Path = UNIVERSES_CSV,
+    universes_dir: Path = UNIVERSES_DIR,
+    default_asset_type: str | None = None,
+) -> list[dict[str, str]]:
+    rows = _read_universe_rows(
+        universe,
+        universes_path=universes_path,
+        universes_dir=universes_dir,
+        default_asset_type=default_asset_type,
+    )
     active_rows = [row for row in rows if row["is_active"] == "true"]
     if not active_rows:
-        raise ValueError(f"asset_type={config.asset_type} 的 pipeline universe 无 active 标的")
+        raise ValueError(f"universe={universe} 无 active 标的")
     return active_rows
 
 
-def resolve_pipeline_symbols(asset_type: str, *, universes_dir: Path = UNIVERSES_DIR, path: Path = ASSET_TYPES_CSV) -> list[str]:
-    return [row["symbol"] for row in load_pipeline_universe(asset_type, universes_dir=universes_dir, path=path)]
+def resolve_universe_rows(
+    universe: str,
+    *,
+    universes_path: Path = UNIVERSES_CSV,
+    universes_dir: Path = UNIVERSES_DIR,
+    default_asset_type: str | None = None,
+) -> list[dict[str, str]]:
+    return load_universe(
+        universe,
+        universes_path=universes_path,
+        universes_dir=universes_dir,
+        default_asset_type=default_asset_type,
+    )
 
 
-def get_pipeline_symbol_name_map(asset_type: str, *, universes_dir: Path = UNIVERSES_DIR, path: Path = ASSET_TYPES_CSV) -> dict[str, str]:
-    return {row["symbol"]: row["name"] for row in load_pipeline_universe(asset_type, universes_dir=universes_dir, path=path)}
+def resolve_universe_symbols(
+    universe: str,
+    *,
+    asset_type: str | None = None,
+    universes_path: Path = UNIVERSES_CSV,
+    universes_dir: Path = UNIVERSES_DIR,
+    default_asset_type: str | None = None,
+) -> list[str]:
+    rows = load_universe(
+        universe,
+        universes_path=universes_path,
+        universes_dir=universes_dir,
+        default_asset_type=default_asset_type,
+    )
+    if asset_type is not None:
+        normalized_asset_type = normalize_asset_type(asset_type)
+        rows = [row for row in rows if row["asset_type"] == normalized_asset_type]
+    return [row["symbol"] for row in rows]
 
 
-def get_pipeline_symbol_tag_map(asset_type: str, *, universes_dir: Path = UNIVERSES_DIR, path: Path = ASSET_TYPES_CSV) -> dict[str, str]:
+def get_universe_symbol_name_map(
+    universe: str,
+    *,
+    universes_path: Path = UNIVERSES_CSV,
+    universes_dir: Path = UNIVERSES_DIR,
+    default_asset_type: str | None = None,
+) -> dict[tuple[str, str], str]:
+    return {
+        (row["asset_type"], row["symbol"]): row["name"]
+        for row in load_universe(
+            universe,
+            universes_path=universes_path,
+            universes_dir=universes_dir,
+            default_asset_type=default_asset_type,
+        )
+    }
+
+
+def get_universe_symbol_tag_map(
+    universe: str,
+    *,
+    universes_path: Path = UNIVERSES_CSV,
+    universes_dir: Path = UNIVERSES_DIR,
+    default_asset_type: str | None = None,
+) -> dict[tuple[str, str], str]:
+    return {
+        (row["asset_type"], row["symbol"]): str(row.get("tag", "")).strip()
+        for row in load_universe(
+            universe,
+            universes_path=universes_path,
+            universes_dir=universes_dir,
+            default_asset_type=default_asset_type,
+        )
+    }
+
+
+def load_pipeline_universe(
+    asset_type: str,
+    *,
+    universes_dir: Path = UNIVERSES_DIR,
+    path: Path = ASSET_TYPES_CSV,
+    universes_path: Path = UNIVERSES_CSV,
+) -> list[dict[str, str]]:
+    config = get_asset_type_config(asset_type, path=path)
+    rows = load_universe(
+        config.pipeline_universe,
+        universes_path=universes_path,
+        universes_dir=universes_dir,
+        default_asset_type=config.asset_type,
+    )
+    normalized_asset_type = normalize_asset_type(asset_type)
+    filtered = [row for row in rows if row["asset_type"] == normalized_asset_type]
+    if not filtered:
+        raise ValueError(f"asset_type={config.asset_type} 的 pipeline universe 无 active 标的")
+    return filtered
+
+
+def resolve_pipeline_symbols(
+    asset_type: str,
+    *,
+    universes_dir: Path = UNIVERSES_DIR,
+    path: Path = ASSET_TYPES_CSV,
+    universes_path: Path = UNIVERSES_CSV,
+) -> list[str]:
+    return [
+        row["symbol"]
+        for row in load_pipeline_universe(
+            asset_type,
+            universes_dir=universes_dir,
+            path=path,
+            universes_path=universes_path,
+        )
+    ]
+
+
+def get_pipeline_symbol_name_map(
+    asset_type: str,
+    *,
+    universes_dir: Path = UNIVERSES_DIR,
+    path: Path = ASSET_TYPES_CSV,
+    universes_path: Path = UNIVERSES_CSV,
+) -> dict[str, str]:
+    return {
+        row["symbol"]: row["name"]
+        for row in load_pipeline_universe(
+            asset_type,
+            universes_dir=universes_dir,
+            path=path,
+            universes_path=universes_path,
+        )
+    }
+
+
+def get_pipeline_symbol_tag_map(
+    asset_type: str,
+    *,
+    universes_dir: Path = UNIVERSES_DIR,
+    path: Path = ASSET_TYPES_CSV,
+    universes_path: Path = UNIVERSES_CSV,
+) -> dict[str, str]:
     return {
         row["symbol"]: str(row.get("tag", "")).strip()
-        for row in load_pipeline_universe(asset_type, universes_dir=universes_dir, path=path)
+        for row in load_pipeline_universe(
+            asset_type,
+            universes_dir=universes_dir,
+            path=path,
+            universes_path=universes_path,
+        )
     }
+
+
+def write_universe_rows(
+    universe: str,
+    rows: list[dict[str, str | bool]],
+    *,
+    universes_path: Path = UNIVERSES_CSV,
+    universes_dir: Path = UNIVERSES_DIR,
+    default_asset_type: str | None = None,
+) -> list[dict[str, str]]:
+    config = get_universe_config(universe, path=universes_path)
+    target = _resolve_universe_path(config.universe, universes_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    normalized_rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    extra_fieldnames: set[str] = set()
+    for row in rows:
+        asset_type = _infer_row_asset_type(default_asset_type, row.get("asset_type"))
+        symbol = normalize_symbol_for_asset_type(asset_type, str(row.get("symbol", "")))
+        key = (asset_type, symbol)
+        if key in seen:
+            raise ValueError(f"写入 universe 时发现重复成员: {asset_type}:{symbol}")
+        seen.add(key)
+        normalized_row = {
+            "asset_type": asset_type,
+            "symbol": symbol,
+            "name": _normalize_name(str(row.get("name", ""))),
+            "is_active": "true" if _parse_bool(row.get("is_active", "true"), field_name="is_active") else "false",
+        }
+        for key_name, value in row.items():
+            normalized_key = str(key_name).strip()
+            if normalized_key in {"asset_type", "symbol", "name", "is_active"} or not normalized_key:
+                continue
+            normalized_row[normalized_key] = _normalize_tag(str(value))
+            extra_fieldnames.add(normalized_key)
+        normalized_rows.append(normalized_row)
+
+    if not normalized_rows:
+        raise ValueError(f"universe={universe} 不能为空")
+
+    normalized_rows.sort(key=lambda row: (row["asset_type"], row["symbol"]))
+    with target.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["asset_type", "symbol", "name", "is_active", *sorted(extra_fieldnames)],
+        )
+        writer.writeheader()
+        writer.writerows(normalized_rows)
+
+    return load_universe(
+        config.universe,
+        universes_path=universes_path,
+        universes_dir=universes_dir,
+        default_asset_type=default_asset_type,
+    )
 
 
 def write_pipeline_universe_rows(
@@ -219,39 +468,26 @@ def write_pipeline_universe_rows(
     *,
     universes_dir: Path = UNIVERSES_DIR,
     path: Path = ASSET_TYPES_CSV,
+    universes_path: Path = UNIVERSES_CSV,
 ) -> list[dict[str, str]]:
     config = get_asset_type_config(asset_type, path=path)
-    target = _resolve_universe_path(config, universes_dir)
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    normalized_rows: list[dict[str, str]] = []
-    seen: set[str] = set()
-    extra_fieldnames: set[str] = set()
+    normalized_asset_type = normalize_asset_type(asset_type)
+    normalized_rows = []
     for row in rows:
-        symbol = normalize_symbol_for_asset_type(config.asset_type, str(row.get("symbol", "")))
-        if symbol in seen:
-            raise ValueError(f"写入 universe 时发现重复 symbol: {symbol}")
-        seen.add(symbol)
-        normalized_row = {
-            "symbol": symbol,
-            "name": _normalize_name(str(row.get("name", ""))),
-            "is_active": "true" if _parse_bool(row.get("is_active", "true"), field_name="is_active") else "false",
-        }
-        for key, value in row.items():
-            normalized_key = str(key).strip()
-            if normalized_key in {"symbol", "name", "is_active"} or not normalized_key:
-                continue
-            normalized_row[normalized_key] = _normalize_tag(str(value))
-            extra_fieldnames.add(normalized_key)
-        normalized_rows.append(normalized_row)
+        current = dict(row)
+        current["asset_type"] = normalize_asset_type(str(current.get("asset_type", normalized_asset_type)) or normalized_asset_type)
+        normalized_rows.append(current)
 
-    if not normalized_rows:
-        raise ValueError(f"asset_type={asset_type} 的 pipeline universe 不能为空")
-
-    normalized_rows.sort(key=lambda row: row["symbol"])
-    with target.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["symbol", "name", "is_active", *sorted(extra_fieldnames)])
-        writer.writeheader()
-        writer.writerows(normalized_rows)
-
-    return load_pipeline_universe(config.asset_type, universes_dir=universes_dir, path=path)
+    write_universe_rows(
+        config.pipeline_universe,
+        normalized_rows,
+        universes_path=universes_path,
+        universes_dir=universes_dir,
+        default_asset_type=config.asset_type,
+    )
+    return load_pipeline_universe(
+        asset_type,
+        universes_dir=universes_dir,
+        path=path,
+        universes_path=universes_path,
+    )

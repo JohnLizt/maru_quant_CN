@@ -794,6 +794,7 @@ def run_strategy_backtest(
     strategy: BaseStrategy,
     *,
     asset_type: str | None = None,
+    universe: str | None = None,
     profile_name: str,
     start: str | date | datetime,
     end: str | date | datetime,
@@ -820,6 +821,7 @@ def run_strategy_backtest(
         start_date=start,
         end_date=end,
         asset_type=asset_type,
+        universe=universe,
         profile_name=profile_name,
         **(snapshot_kwargs or {}),
     )

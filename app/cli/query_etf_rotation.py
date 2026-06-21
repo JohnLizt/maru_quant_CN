@@ -1,4 +1,4 @@
-"""Query ETF CN rotation candidates from strategy snapshot service."""
+"""Query ETF rotation candidates from strategy snapshot service."""
 from __future__ import annotations
 
 import argparse
@@ -60,20 +60,20 @@ def _to_strategy_rows(decisions) -> list[dict]:
     return results
 
 
-def main(date: str | None, top_n: int, profile_name: str) -> int:
-    strategy = ETFUniverseRotationStrategy(top_n=5, profile_name=profile_name, max_per_tag=1)
+def main(date: str | None, top_n: int, profile_name: str, universe: str) -> int:
+    strategy = ETFUniverseRotationStrategy(top_n=top_n, profile_name=profile_name, max_per_tag=1)
     as_of_date = datetime.strptime(date, "%Y-%m-%d").date() if date else None
     bundle = build_strategy_snapshot(
         strategy,
         start_date=as_of_date,
         end_date=as_of_date,
-        asset_type="etf_CN",
+        universe=universe,
         profile_name=profile_name,
         as_of_date=as_of_date,
     )
     payload = {
         "query": {
-            "asset_type": "etf_CN",
+            "universe": universe,
             "profile": profile_name,
             "strategy": strategy.strategy_name,
             "strategy_mode": strategy.strategy_mode,
@@ -95,9 +95,14 @@ def main(date: str | None, top_n: int, profile_name: str) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Query ETF CN rotation candidates")
+    parser = argparse.ArgumentParser(description="Query ETF rotation candidates")
     parser.add_argument("--date", default=None, help="单日查询日期 YYYY-MM-DD")
-    parser.add_argument("--top", type=int, default=10, help="返回前 N 名展示结果，默认 10")
-    parser.add_argument("--profile", default="trend_etf_v1", help="ETF signal profile，默认 trend_etf_v1")
+    parser.add_argument("--top", type=int, default=4, help="返回前 N 名展示结果，默认 4")
+    parser.add_argument(
+        "--profile",
+        default="trend_etf_momentum_reg20",
+        help="ETF signal profile，默认 trend_etf_momentum_reg20",
+    )
+    parser.add_argument("--universe", default="etf_mixed", help="策略池，默认 etf_mixed")
     args = parser.parse_args()
-    raise SystemExit(main(args.date, args.top, args.profile))
+    raise SystemExit(main(args.date, args.top, args.profile, args.universe))

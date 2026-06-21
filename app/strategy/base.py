@@ -61,6 +61,8 @@ class BaseStrategy(ABC):
             str(value)
             for value in signal_snapshot.get_column("asset_type").drop_nulls().unique().to_list()
         }
+        if "*" in self.supported_asset_types:
+            return
         unsupported_assets = asset_types - set(self.supported_asset_types)
         if unsupported_assets:
             raise ValueError(

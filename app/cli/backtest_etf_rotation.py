@@ -41,6 +41,7 @@ def main(
     start_date: str,
     end_date: str,
     profile_name: str,
+    universe: str,
     top_n: int,
     max_per_tag: int,
     rebalance_weekday: int,
@@ -74,8 +75,9 @@ def main(
         enable_console=True,
     )
     logger.info(
-        "回测启动 | profile={} | asset_type=etf_CN | start={} | end={} | top_n={} | max_per_tag={} | rebalance_frequency=weekly | rebalance_weekday={} | execution_lag={} | commission_bps={} | slippage_bps={} | risk_control={} | initial_capital={} | commission_min={} | cash_interest_rate={}",
+        "回测启动 | profile={} | universe={} | start={} | end={} | top_n={} | max_per_tag={} | rebalance_frequency=weekly | rebalance_weekday={} | execution_lag={} | commission_bps={} | slippage_bps={} | risk_control={} | initial_capital={} | commission_min={} | cash_interest_rate={}",
         profile_name,
+        universe,
         start_date,
         end_date,
         top_n,
@@ -107,7 +109,8 @@ def main(
     )
     bundle = run_strategy_backtest(
         strategy,
-        asset_type="etf_CN",
+        asset_type=None,
+        universe=universe,
         profile_name=profile_name,
         start=start_date,
         end=end_date,
@@ -140,7 +143,7 @@ def main(
 
     payload = {
         "query": {
-            "asset_type": "etf_CN",
+            "universe": universe,
             "profile": profile_name,
             "strategy": strategy.strategy_name,
             "strategy_mode": strategy.strategy_mode,
@@ -183,7 +186,7 @@ def main(
         return 0
 
     print("ETF Rotation Backtest")
-    print(f"asset_type: etf_CN")
+    print(f"universe: {universe}")
     print(f"window: {start_date} -> {end_date}")
     print(f"strategy: {strategy.strategy_name} | profile: {profile_name}")
     print(
@@ -225,8 +228,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run ETF weekly rotation backtest")
     parser.add_argument("--start-date", default="2023-06-03", help="开始日期 YYYY-MM-DD")
     parser.add_argument("--end-date", default=default_end, help="结束日期 YYYY-MM-DD")
-    parser.add_argument("--profile", default="trend_etf_v1", help="ETF signal profile，默认 trend_etf_v1")
-    parser.add_argument("--top-n", type=int, default=5, help="持仓数量，默认 5")
+    parser.add_argument(
+        "--profile",
+        default="trend_etf_momentum_reg20",
+        help="ETF signal profile，默认 trend_etf_momentum_reg20",
+    )
+    parser.add_argument("--universe", default="etf_mixed", help="策略池，默认 etf_mixed")
+    parser.add_argument("--top-n", type=int, default=4, help="持仓数量，默认 4")
     parser.add_argument("--max-per-tag", type=int, default=1, help="同 tag 最大持仓数，默认 1")
     parser.add_argument("--rebalance-weekday", type=int, default=2, help="周调仓日，Python weekday 语义，周一=0，默认周三=2")
     parser.add_argument("--execution-lag", type=int, default=1, help="信号到执行的交易日延迟，默认 1")
@@ -256,6 +264,7 @@ if __name__ == "__main__":
             args.start_date,
             args.end_date,
             args.profile,
+            args.universe,
             args.top_n,
             args.max_per_tag,
             args.rebalance_weekday,

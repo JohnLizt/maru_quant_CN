@@ -8,10 +8,10 @@ import polars as pl
 from sqlalchemy import text
 
 from app.services.asset_universe import (
-    get_pipeline_symbol_name_map,
-    get_pipeline_symbol_tag_map,
+    get_universe_symbol_name_map,
+    get_universe_symbol_tag_map,
     normalize_symbol,
-    resolve_pipeline_symbols,
+    resolve_universe_rows,
 )
 from app.signals.composite import apply_composite_score
 from app.signals.normalization import apply_signal_profile
@@ -87,33 +87,51 @@ def _empty_result(profile: SignalProfile) -> pl.DataFrame:
     return pl.DataFrame(schema=_result_schema(profile))
 
 
-def _validate_profile_asset_type(profile: SignalProfile, asset_type: str) -> None:
-    if asset_type not in profile.supported_asset_types:
+def _validate_profile_asset_types(profile: SignalProfile, asset_types: set[str]) -> None:
+    if "*" in profile.supported_asset_types:
+        return
+    unsupported_asset_types = sorted(asset_types - set(profile.supported_asset_types))
+    if unsupported_asset_types:
         raise ValueError(
-            f"profile={profile.name} 不支持 asset_type={asset_type}，可用: {list(profile.supported_asset_types)}"
+            f"profile={profile.name} 不支持 asset_type={unsupported_asset_types}，可用: {list(profile.supported_asset_types)}"
         )
 
 
-def _query_universe_factors(profile: SignalProfile, asset_type: str, start: date, end: date) -> pl.DataFrame:
+def _query_universe_factors(
+    profile: SignalProfile,
+    universe_rows: list[dict[str, str]],
+    start: date,
+    end: date,
+) -> pl.DataFrame:
     sql = text("""
         SELECT time, asset_type, symbol, factor_name, factor_value
         FROM factors.daily_factors
         WHERE asset_type = :asset_type
+          AND symbol = ANY(:symbols)
           AND factor_name = ANY(:factor_names)
           AND time >= :start_date
           AND time < (CAST(:end_date AS date) + INTERVAL '1 day')
         ORDER BY time, symbol, factor_name
     """)
 
-    params: dict[str, Any] = {
-        "asset_type": asset_type,
-        "factor_names": profile.factor_names,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
-    }
-
     with get_engine().connect() as conn:
-        rows = conn.execute(sql, params).fetchall()
+        rows: list[Any] = []
+        rows_by_asset_type: dict[str, list[str]] = {}
+        for row in universe_rows:
+            rows_by_asset_type.setdefault(row["asset_type"], []).append(row["symbol"])
+        for asset_type, symbols in rows_by_asset_type.items():
+            rows.extend(
+                conn.execute(
+                    sql,
+                    {
+                        "asset_type": asset_type,
+                        "symbols": sorted(set(symbols)),
+                        "factor_names": profile.factor_names,
+                        "start_date": start.isoformat(),
+                        "end_date": end.isoformat(),
+                    },
+                ).fetchall()
+            )
 
     if not rows:
         return pl.DataFrame(schema={
@@ -142,26 +160,37 @@ def _pivot_factors(df: pl.DataFrame, profile: SignalProfile) -> pl.DataFrame:
     return wide.filter(pl.all_horizontal(validity_checks))
 
 
-def _attach_symbol_names(df: pl.DataFrame, asset_type: str) -> pl.DataFrame:
-    stock_pool_map = get_pipeline_symbol_name_map(asset_type)
-    tag_map = get_pipeline_symbol_tag_map(asset_type)
+def _attach_symbol_names(df: pl.DataFrame, universe_rows: list[dict[str, str]], universe: str) -> pl.DataFrame:
+    symbol_name_map = get_universe_symbol_name_map(universe)
+    tag_map = get_universe_symbol_tag_map(universe)
     mapping_rows = [
-        {"symbol": symbol, "symbol_name": name, "tag": tag_map.get(symbol, "")}
-        for symbol, name in stock_pool_map.items()
+        {
+            "asset_type": asset_type,
+            "symbol": symbol,
+            "symbol_name": symbol_name_map.get((asset_type, symbol), ""),
+            "tag": tag_map.get((asset_type, symbol), ""),
+        }
+        for asset_type, symbol in {(row["asset_type"], row["symbol"]) for row in universe_rows}
     ]
     if not mapping_rows:
         return df.with_columns([pl.lit("").alias("symbol_name"), pl.lit("").alias("tag")])
 
-    mapping_df = pl.DataFrame(mapping_rows, schema={"symbol": pl.Utf8, "symbol_name": pl.Utf8, "tag": pl.Utf8})
+    mapping_df = pl.DataFrame(
+        mapping_rows,
+        schema={"asset_type": pl.Utf8, "symbol": pl.Utf8, "symbol_name": pl.Utf8, "tag": pl.Utf8},
+    )
     return (
-        df.join(mapping_df, on="symbol", how="left")
+        df.join(mapping_df, on=["asset_type", "symbol"], how="left")
         .with_columns([pl.col("symbol_name").fill_null(""), pl.col("tag").fill_null("")])
     )
 
 
-def _filter_to_pipeline_universe(df: pl.DataFrame, asset_type: str) -> pl.DataFrame:
-    universe_symbols = resolve_pipeline_symbols(asset_type)
-    return df.filter(pl.col("symbol").is_in(universe_symbols))
+def _filter_to_universe(df: pl.DataFrame, universe_rows: list[dict[str, str]]) -> pl.DataFrame:
+    universe_df = pl.DataFrame(
+        [{"asset_type": row["asset_type"], "symbol": row["symbol"]} for row in universe_rows],
+        schema={"asset_type": pl.Utf8, "symbol": pl.Utf8},
+    )
+    return df.join(universe_df, on=["asset_type", "symbol"], how="inner")
 
 
 def _smooth_factor_scores(df: pl.DataFrame, profile: SignalProfile) -> pl.DataFrame:
@@ -185,28 +214,35 @@ def build_signal_snapshot(
     start_date: str | date | datetime | None = None,
     end_date: str | date | datetime | None = None,
     *,
-    asset_type: str = "stock_CN",
-    profile_name: str = "trend_v1",
+    asset_type: str | None = "stock_CN",
+    universe: str | None = None,
+    profile_name: str = "trend_etf_momentum_reg20",
 ) -> tuple[SignalProfile, pl.DataFrame]:
     """Return full-universe signal ranking table for the requested profile."""
 
     profile = get_signal_profile(profile_name)
-    _validate_profile_asset_type(profile, asset_type)
     normalized_symbols = _normalize_symbols(symbols)
     start, end = _normalize_date_range(start_date, end_date)
+    target_universe = str(universe or asset_type or "stock_CN").strip()
+    if not target_universe:
+        raise ValueError("universe 不能为空")
+    default_asset_type = asset_type if asset_type else None
+    universe_rows = resolve_universe_rows(target_universe, default_asset_type=default_asset_type)
+    universe_asset_types = {row["asset_type"] for row in universe_rows}
+    _validate_profile_asset_types(profile, universe_asset_types)
 
-    raw_factors = _query_universe_factors(profile, asset_type, start, end)
+    raw_factors = _query_universe_factors(profile, universe_rows, start, end)
     if raw_factors.is_empty():
         return profile, _empty_result(profile)
 
     scored = (
         raw_factors
         .pipe(_pivot_factors, profile=profile)
-        .pipe(_filter_to_pipeline_universe, asset_type=asset_type)
+        .pipe(_filter_to_universe, universe_rows=universe_rows)
         .pipe(apply_signal_profile, profile=profile)
         .pipe(_smooth_factor_scores, profile=profile)
         .pipe(apply_composite_score, profile=profile)
-        .pipe(_attach_symbol_names, asset_type=asset_type)
+        .pipe(_attach_symbol_names, universe_rows=universe_rows, universe=target_universe)
         .with_columns(pl.lit(profile.signal_mode).alias("signal_mode"))
         .with_columns(pl.col("composite_score").rank(method="ordinal", descending=True).over("time").cast(pl.UInt32).alias("rank"))
         .select([
@@ -240,8 +276,9 @@ def query_signal_rankings(
     start_date: str | date | datetime | None = None,
     end_date: str | date | datetime | None = None,
     *,
-    asset_type: str = "stock_CN",
-    profile_name: str = "trend_v1",
+    asset_type: str | None = "stock_CN",
+    universe: str | None = None,
+    profile_name: str = "trend_etf_momentum_reg20",
 ) -> tuple[SignalProfile, pl.DataFrame]:
     """Backward-compatible alias for build_signal_snapshot."""
 
@@ -250,6 +287,7 @@ def query_signal_rankings(
         start_date,
         end_date,
         asset_type=asset_type,
+        universe=universe,
         profile_name=profile_name,
     )
 
@@ -259,8 +297,9 @@ def query_signal_scores(
     start_date: str | date | datetime | None = None,
     end_date: str | date | datetime | None = None,
     *,
-    asset_type: str = "stock_CN",
-    profile_name: str = "trend_v1",
+    asset_type: str | None = "stock_CN",
+    universe: str | None = None,
+    profile_name: str = "trend_etf_momentum_reg20",
     top_n: int | None = None,
 ) -> tuple[SignalProfile, pl.DataFrame]:
     """Query composite signal scores over the full factor universe."""
@@ -270,6 +309,7 @@ def query_signal_scores(
         start_date,
         end_date,
         asset_type=asset_type,
+        universe=universe,
         profile_name=profile_name,
     )
 

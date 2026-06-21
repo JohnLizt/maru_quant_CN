@@ -42,6 +42,7 @@ def _build_json_payload(
     factor_names: list[str],
     normalization_scope: str,
     asset_type: str,
+    universe: str | None,
     top_n: int | None,
     df: pl.DataFrame,
     start_date: str | None,
@@ -67,6 +68,7 @@ def _build_json_payload(
         "profile": profile_name,
         "signal_mode": signal_mode,
         "asset_type": asset_type,
+        "universe": universe,
         "normalization_scope": normalization_scope,
         "start_date": start_date,
         "end_date": end_date,
@@ -90,6 +92,7 @@ def _print_result(
     profile_name: str,
     normalization_scope: str,
     asset_type: str,
+    universe: str | None,
     top_n: int | None,
     start_date: str | None,
     end_date: str | None,
@@ -101,6 +104,7 @@ def _print_result(
             profile.factor_names,
             normalization_scope,
             asset_type,
+            universe,
             top_n,
             df,
             start_date,
@@ -126,6 +130,7 @@ def main(
     output_format: str,
     profile_name: str,
     asset_type: str,
+    universe: str | None,
     top_n: int | None,
 ) -> None:
     expanded_symbols = _expand_symbols(symbols)
@@ -134,13 +139,15 @@ def main(
         start_date,
         end_date,
         asset_type=asset_type,
+        universe=universe,
         profile_name=profile_name,
         top_n=top_n,
     )
 
     logger.info(
-        "查询信号评分 | asset_type={} | profile={} | scope={} | symbols={} | start={} | end={} | top_n={}",
+        "查询信号评分 | asset_type={} | universe={} | profile={} | scope={} | symbols={} | start={} | end={} | top_n={}",
         asset_type,
+        universe or "-",
         profile.name,
         profile.normalization_scope,
         expanded_symbols or "ALL",
@@ -159,6 +166,7 @@ def main(
             profile_name=profile.name,
             normalization_scope=profile.normalization_scope,
             asset_type=asset_type,
+            universe=universe,
             top_n=top_n,
             start_date=start_date,
             end_date=end_date,
@@ -179,8 +187,9 @@ if __name__ == "__main__":
     parser.add_argument("--date", default=None, help=f"单日查询日期 YYYY-MM-DD（会同时作为 start/end，默认 {default_today}）")
     parser.add_argument("--start-date", default=None, help="开始日期 YYYY-MM-DD")
     parser.add_argument("--end-date", default=None, help="结束日期 YYYY-MM-DD")
-    parser.add_argument("--profile", default="trend_v1", help="信号评分 profile，默认 trend_v1")
-    parser.add_argument("--asset-type", default="stock_CN", help="资产域，默认 stock_CN")
+    parser.add_argument("--profile", default="trend_etf_momentum_reg20", help="信号评分 profile，默认 trend_etf_momentum_reg20")
+    parser.add_argument("--asset-type", default="etf_CN", help="资产域，默认 etf_CN")
+    parser.add_argument("--universe", default=None, help="可选：策略池名，按成员及其 asset_type 分批查数")
     parser.add_argument("--output", default=None, help="可选：将结果导出为 CSV，如 logs/query_signal_scores.csv")
     parser.add_argument("--top", type=int, default=None, help="可选：按单日综合分截取前 N 名")
     parser.add_argument("--format", choices=["table", "json", "csv"], default="table", help="输出格式：table（默认）、json、csv")
@@ -193,7 +202,17 @@ if __name__ == "__main__":
         end_date = args.date
 
     try:
-        main(args.symbols or [], start_date, end_date, args.output, args.format, args.profile, args.asset_type, args.top)
+        main(
+            args.symbols or [],
+            start_date,
+            end_date,
+            args.output,
+            args.format,
+            args.profile,
+            args.asset_type,
+            args.universe,
+            args.top,
+        )
     except ValueError as exc:
         logger.error(str(exc))
         sys.exit(1)

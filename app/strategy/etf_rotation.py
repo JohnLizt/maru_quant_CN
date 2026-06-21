@@ -6,19 +6,24 @@ from datetime import date
 
 import polars as pl
 
+from app.signals.profiles import get_signal_profile
 from app.strategy.base import BaseStrategy
 
 
 class ETFUniverseRotationStrategy(BaseStrategy):
-    """Pick the top ranked ETF names from the full etf_CN universe."""
+    """Pick the top ranked ETF names from the strategy universe snapshot."""
 
     strategy_name = "etf_rotation_v1"
     strategy_mode = "cross_sectional"
     supported_signal_modes = ("cross_sectional",)
     supported_asset_types = ("etf_CN",)
-    asset_type = "etf_CN"
 
-    def __init__(self, top_n: int = 5, profile_name: str = "trend_etf_v1", max_per_tag: int = 1) -> None:
+    def __init__(
+        self,
+        top_n: int = 4,
+        profile_name: str = "trend_etf_momentum_reg20",
+        max_per_tag: int = 1,
+    ) -> None:
         if top_n <= 0:
             raise ValueError("top_n 必须大于 0")
         if max_per_tag <= 0:
@@ -26,6 +31,7 @@ class ETFUniverseRotationStrategy(BaseStrategy):
         self.top_n = top_n
         self.profile_name = profile_name
         self.max_per_tag = max_per_tag
+        self.supported_asset_types = get_signal_profile(profile_name).supported_asset_types
 
     def build_decisions(
         self,
@@ -36,7 +42,7 @@ class ETFUniverseRotationStrategy(BaseStrategy):
         if signal_snapshot.is_empty():
             return self.empty_decisions()
 
-        df = signal_snapshot.filter(pl.col("asset_type") == self.asset_type)
+        df = signal_snapshot
         if as_of_date is not None:
             df = df.filter(pl.col("time").dt.date() == pl.lit(as_of_date))
         if df.is_empty():

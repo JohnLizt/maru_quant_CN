@@ -55,12 +55,12 @@ def test_resolve_factors_rejects_unsupported_factor_for_etf() -> None:
         resolve_factors(["limit_up"], asset_type="etf_CN")
 
 
-def test_trend_etf_v1_profile_weights_and_factor_set() -> None:
-    profile = get_signal_profile("trend_etf_v1")
+def test_trend_etf_momentum_reg20_profile_weights_and_factor_set() -> None:
+    profile = get_signal_profile("trend_etf_momentum_reg20")
 
-    assert profile.factor_names == ["ret_30_rank"]
+    assert profile.factor_names == ["momentum_reg_20_rank"]
     assert profile.signal_mode == "cross_sectional"
-    assert profile.supported_asset_types == ("etf_CN",)
+    assert profile.supported_asset_types == ("*",)
     rule = profile.factor_rules[0]
     assert rule.method == "linear_clip"
     assert rule.weight == 1.0
@@ -68,13 +68,13 @@ def test_trend_etf_v1_profile_weights_and_factor_set() -> None:
     assert rule.clip_upper == 1.0
 
 
-def test_trend_etf_v1_composite_uses_ret30_rank_score() -> None:
-    profile = get_signal_profile("trend_etf_v1")
+def test_trend_etf_momentum_reg20_composite_uses_factor_score() -> None:
+    profile = get_signal_profile("trend_etf_momentum_reg20")
     df = pl.DataFrame(
         [
             {
-                "ret_30_rank": 0.95,
-                "ret_30_rank_score": 0.9,
+                "momentum_reg_20_rank": 0.95,
+                "momentum_reg_20_rank_score": 0.9,
             }
         ]
     )
@@ -86,80 +86,13 @@ def test_trend_etf_v1_composite_uses_ret30_rank_score() -> None:
     assert result.get_column("label").to_list()[0] == "strong"
 
 
-def test_trend_etf_rsi14_profile_weights_and_factor_set() -> None:
-    profile = get_signal_profile("trend_etf_rsi14")
-
-    assert profile.factor_names == ["rsi14"]
-    assert profile.signal_mode == "cross_sectional"
-    assert profile.supported_asset_types == ("etf_CN",)
-    rule = profile.factor_rules[0]
-    assert rule.method == "linear_clip"
-    assert rule.weight == 1.0
-    assert rule.clip_lower == 30.0
-    assert rule.clip_upper == 80.0
-
-
-def test_trend_etf_rsi14_composite_uses_rsi14_score() -> None:
-    profile = get_signal_profile("trend_etf_rsi14")
-    df = pl.DataFrame(
-        [
-            {
-                "rsi14": 68.0,
-                "rsi14_score": 0.7,
-            }
-        ]
-    )
-
-    result = apply_composite_score(df, profile)
-
-    assert result.get_column("composite_score").to_list()[0] == pytest.approx(0.7)
-    assert result.get_column("contributors").to_list()[0] == ["rsi_in_healthy_trend_zone"]
-    assert result.get_column("label").to_list()[0] == "strong"
-
-
-def test_trend_etf_rsi14_raw_profile_weights_and_factor_set() -> None:
-    profile = get_signal_profile("trend_etf_rsi14_raw")
-
-    assert profile.factor_names == ["rsi14"]
-    assert profile.signal_mode == "cross_sectional"
-    assert profile.supported_asset_types == ("etf_CN",)
-    rule = profile.factor_rules[0]
-    assert rule.method == "rank_to_unit"
-    assert rule.weight == 1.0
-
-
-def test_trend_etf_rsi14_raw_composite_uses_rsi14_rank_score() -> None:
-    profile = get_signal_profile("trend_etf_rsi14_raw")
-    df = pl.DataFrame(
-        [
-            {
-                "rsi14": 68.0,
-                "rsi14_score": 0.7,
-            }
-        ]
-    )
-
-    result = apply_composite_score(df, profile)
-
-    assert result.get_column("composite_score").to_list()[0] == pytest.approx(0.7)
-    assert result.get_column("contributors").to_list()[0] == ["rsi_in_healthy_trend_zone"]
-    assert result.get_column("label").to_list()[0] == "strong"
-
-
-def test_trend_etf_rsi14_raw_smooth_profile_weights_and_factor_set() -> None:
-    profile = get_signal_profile("trend_etf_rsi14_raw_smooth")
-
-    assert profile.factor_names == ["rsi14"]
-    assert profile.signal_mode == "cross_sectional"
-    assert profile.supported_asset_types == ("etf_CN",)
-    assert profile.score_smoothing_window == 5
-    rule = profile.factor_rules[0]
-    assert rule.method == "rank_to_unit"
-    assert rule.weight == 1.0
+def test_trend_etf_momentum_reg20_profile_supports_mixed_universe() -> None:
+    profile = get_signal_profile("trend_etf_momentum_reg20")
+    assert profile.supported_asset_types == ("*",)
 
 
 def test_etf_rotation_strategy_selects_top_n_and_emits_metadata() -> None:
-    strategy = ETFUniverseRotationStrategy(top_n=2, profile_name="trend_etf_v1")
+    strategy = ETFUniverseRotationStrategy(top_n=2, profile_name="trend_etf_momentum_reg20")
     ts = datetime(2026, 5, 30, tzinfo=timezone.utc)
     df = pl.DataFrame(
         [
@@ -182,12 +115,12 @@ def test_etf_rotation_strategy_selects_top_n_and_emits_metadata() -> None:
     assert result.height == 2
     assert result.get_column("symbol").to_list() == ["518880.SH", "512760.SH"]
     metadata = json.loads(result.get_column("metadata").to_list()[0])
-    assert metadata == {"rank": 1, "tag": "gold", "profile": "trend_etf_v1"}
+    assert metadata == {"rank": 1, "tag": "gold", "profile": "trend_etf_momentum_reg20"}
     assert result.get_column("target_weight").to_list() == [0.5, 0.5]
 
 
 def test_etf_rotation_strategy_limits_same_tag_exposure() -> None:
-    strategy = ETFUniverseRotationStrategy(top_n=3, profile_name="trend_etf_v1", max_per_tag=1)
+    strategy = ETFUniverseRotationStrategy(top_n=3, profile_name="trend_etf_momentum_reg20", max_per_tag=1)
     ts = datetime(2026, 5, 30, tzinfo=timezone.utc)
     df = pl.DataFrame(
         [
@@ -217,23 +150,23 @@ def test_strategy_service_builds_snapshot_and_decisions(monkeypatch: pytest.Monk
     ts = datetime(2026, 5, 30, tzinfo=timezone.utc)
     rankings = pl.DataFrame(
         [
-            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "518880.SH", "symbol_name": "黄金ETF华安", "tag": "gold", "rsi14": 65.0, "price_to_ma20": 0.03, "macd_norm": 0.01, "ma_cross": 0.01, "rsi14_score": 0.7, "price_to_ma20_score": 0.4, "macd_norm_score": 0.5, "ma_cross_score": 0.1, "composite_score": 0.8, "label": "strong", "contributors": ["rsi_in_healthy_trend_zone"], "rank": 1},
-            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "512000.SH", "symbol_name": "券商ETF华宝", "tag": "broker", "rsi14": 60.0, "price_to_ma20": 0.02, "macd_norm": 0.00, "ma_cross": 0.00, "rsi14_score": 0.6, "price_to_ma20_score": 0.3, "macd_norm_score": 0.1, "ma_cross_score": 0.0, "composite_score": 0.5, "label": "positive", "contributors": ["mixed_signal"], "rank": 2},
+            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "518880.SH", "symbol_name": "黄金ETF华安", "tag": "gold", "momentum_reg_20_rank": 0.80, "momentum_reg_20_rank_score": 0.8, "composite_score": 0.8, "label": "strong", "contributors": ["mixed_signal"], "rank": 1},
+            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "512000.SH", "symbol_name": "券商ETF华宝", "tag": "broker", "momentum_reg_20_rank": 0.50, "momentum_reg_20_rank_score": 0.5, "composite_score": 0.5, "label": "positive", "contributors": ["mixed_signal"], "rank": 2},
         ]
     )
 
     monkeypatch.setattr(
         "app.services.strategy_service.build_signal_snapshot",
-        lambda *args, **kwargs: (get_signal_profile("trend_etf_v1"), rankings),
+        lambda *args, **kwargs: (get_signal_profile("trend_etf_momentum_reg20"), rankings),
     )
 
-    strategy = ETFUniverseRotationStrategy(top_n=2, profile_name="trend_etf_v1", max_per_tag=1)
+    strategy = ETFUniverseRotationStrategy(top_n=2, profile_name="trend_etf_momentum_reg20", max_per_tag=1)
     bundle = build_strategy_snapshot(
         strategy,
         start_date="2026-05-30",
         end_date="2026-05-30",
         asset_type="etf_CN",
-        profile_name="trend_etf_v1",
+        profile_name="trend_etf_momentum_reg20",
     )
 
     assert bundle.signal_snapshot.height == 2
@@ -242,7 +175,7 @@ def test_strategy_service_builds_snapshot_and_decisions(monkeypatch: pytest.Monk
         strategy,
         target_date="2026-05-30",
         asset_type="etf_CN",
-        profile_name="trend_etf_v1",
+        profile_name="trend_etf_momentum_reg20",
     ).height == 2
 
 
@@ -262,7 +195,7 @@ def test_run_backtest_consumes_decisions_and_returns_metrics(monkeypatch: pytest
                 "score": 0.8,
                 "rank": 1,
                 "tag": "gold",
-                "metadata": json.dumps({"rank": 1, "tag": "gold", "profile": "trend_etf_v1"}),
+                "metadata": json.dumps({"rank": 1, "tag": "gold", "profile": "trend_etf_momentum_reg20"}),
             },
             {
                 "time": ts,
@@ -276,7 +209,7 @@ def test_run_backtest_consumes_decisions_and_returns_metrics(monkeypatch: pytest
                 "score": 0.5,
                 "rank": 2,
                 "tag": "broker",
-                "metadata": json.dumps({"rank": 2, "tag": "broker", "profile": "trend_etf_v1"}),
+                "metadata": json.dumps({"rank": 2, "tag": "broker", "profile": "trend_etf_momentum_reg20"}),
             },
         ]
     )
@@ -619,8 +552,8 @@ def test_run_strategy_backtest_builds_snapshot_decisions_and_result(monkeypatch:
     ts = datetime(2026, 5, 27, tzinfo=timezone.utc)
     snapshot = pl.DataFrame(
         [
-            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "AAA", "symbol_name": "AAA", "tag": "alpha", "rsi14": 60.0, "price_to_ma20": 0.02, "macd_norm": 0.01, "ma_cross": 0.01, "rsi14_score": 0.7, "price_to_ma20_score": 0.5, "macd_norm_score": 0.3, "ma_cross_score": 0.2, "composite_score": 0.8, "label": "strong", "contributors": ["mixed_signal"], "rank": 1},
-            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "BBB", "symbol_name": "BBB", "tag": "beta", "rsi14": 58.0, "price_to_ma20": 0.01, "macd_norm": 0.00, "ma_cross": 0.00, "rsi14_score": 0.6, "price_to_ma20_score": 0.4, "macd_norm_score": 0.1, "ma_cross_score": 0.1, "composite_score": 0.6, "label": "positive", "contributors": ["mixed_signal"], "rank": 2},
+            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "AAA", "symbol_name": "AAA", "tag": "alpha", "momentum_reg_20_rank": 0.8, "momentum_reg_20_rank_score": 0.8, "composite_score": 0.8, "label": "strong", "contributors": ["mixed_signal"], "rank": 1},
+            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "BBB", "symbol_name": "BBB", "tag": "beta", "momentum_reg_20_rank": 0.6, "momentum_reg_20_rank_score": 0.6, "composite_score": 0.6, "label": "positive", "contributors": ["mixed_signal"], "rank": 2},
         ]
     )
     market_data = pl.DataFrame(
@@ -638,11 +571,11 @@ def test_run_strategy_backtest_builds_snapshot_decisions_and_result(monkeypatch:
     )
     monkeypatch.setattr("app.backtest.runner._load_market_data", lambda *args, **kwargs: market_data)
 
-    strategy = ETFUniverseRotationStrategy(top_n=2, profile_name="trend_etf_v1", max_per_tag=1)
+    strategy = ETFUniverseRotationStrategy(top_n=2, profile_name="trend_etf_momentum_reg20", max_per_tag=1)
     result = run_strategy_backtest(
         strategy,
         asset_type="etf_CN",
-        profile_name="trend_etf_v1",
+        profile_name="trend_etf_momentum_reg20",
         start="2026-05-27",
         end="2026-05-27",
         rebalance_frequency="biweekly",
@@ -669,11 +602,11 @@ def test_query_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPatch)
                 "symbol": "AAA",
                 "symbol_name": "AAA",
                 "tag": "alpha",
-                "ret_30_rank": 0.9,
-                "ret_30_rank_score": 0.8,
+                "momentum_reg_20_rank": 0.9,
+                "momentum_reg_20_rank_score": 0.8,
                 "composite_score": 0.8,
                 "label": "strong",
-                "contributors": ["ret_30_rank_strong"],
+                "contributors": ["mixed_signal"],
                 "rank": 1,
             }
         ]
@@ -692,7 +625,7 @@ def test_query_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPatch)
                 "score": 0.8,
                 "rank": 1,
                 "tag": "alpha",
-                "metadata": json.dumps({"rank": 1, "tag": "alpha", "profile": "trend_etf_v1"}),
+                "metadata": json.dumps({"rank": 1, "tag": "alpha", "profile": "trend_etf_momentum_reg20"}),
             }
         ]
     )
@@ -701,16 +634,18 @@ def test_query_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPatch)
 
     def _fake_build_strategy_snapshot(*args, **kwargs):
         captured["profile_name"] = kwargs["profile_name"]
-        captured["asset_type"] = kwargs["asset_type"]
+        captured["asset_type"] = kwargs.get("asset_type")
+        captured["universe"] = kwargs["universe"]
         return StrategySnapshotBundle(signal_snapshot=snapshot, decisions=decisions)
 
     monkeypatch.setattr(query_etf_rotation, "build_strategy_snapshot", _fake_build_strategy_snapshot)
 
-    exit_code = query_etf_rotation.main("2026-05-30", 5, "trend_etf_v1")
+    exit_code = query_etf_rotation.main("2026-05-30", 5, "trend_etf_momentum_reg20", "etf_mixed")
 
     assert exit_code == 0
-    assert captured["profile_name"] == "trend_etf_v1"
-    assert captured["asset_type"] == "etf_CN"
+    assert captured["profile_name"] == "trend_etf_momentum_reg20"
+    assert captured["asset_type"] is None
+    assert captured["universe"] == "etf_mixed"
 
 
 def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -726,11 +661,11 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
                 "symbol": "AAA",
                 "symbol_name": "AAA",
                 "tag": "alpha",
-                "ret_30_rank": 0.9,
-                "ret_30_rank_score": 0.8,
+                "momentum_reg_20_rank": 0.9,
+                "momentum_reg_20_rank_score": 0.8,
                 "composite_score": 0.8,
                 "label": "strong",
-                "contributors": ["ret_30_rank_strong"],
+                "contributors": ["mixed_signal"],
                 "rank": 1,
             }
         ]
@@ -749,7 +684,7 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
                 "score": 0.8,
                 "rank": 1,
                 "tag": "alpha",
-                "metadata": json.dumps({"rank": 1, "tag": "alpha", "profile": "trend_etf_v1"}),
+                "metadata": json.dumps({"rank": 1, "tag": "alpha", "profile": "trend_etf_momentum_reg20"}),
             }
         ]
     )
@@ -763,6 +698,7 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
         captured["strategy_profile_name"] = strategy.profile_name
         captured["profile_name"] = kwargs["profile_name"]
         captured["asset_type"] = kwargs["asset_type"]
+        captured["universe"] = kwargs["universe"]
         captured["risk_config"] = kwargs["risk_config"]
         return StrategyBacktestBundle(
             signal_snapshot=signal_snapshot,
@@ -785,7 +721,8 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
     exit_code = backtest_etf_rotation.main(
         "2026-05-30",
         "2026-05-30",
-        "trend_etf_v1",
+        "trend_etf_momentum_reg20",
+        "etf_mixed",
         5,
         1,
         2,
@@ -800,9 +737,10 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
     )
 
     assert exit_code == 0
-    assert captured["strategy_profile_name"] == "trend_etf_v1"
-    assert captured["profile_name"] == "trend_etf_v1"
-    assert captured["asset_type"] == "etf_CN"
+    assert captured["strategy_profile_name"] == "trend_etf_momentum_reg20"
+    assert captured["profile_name"] == "trend_etf_momentum_reg20"
+    assert captured["asset_type"] is None
+    assert captured["universe"] == "etf_mixed"
     assert captured["risk_config"] is None
 
 
@@ -837,7 +775,8 @@ def test_backtest_etf_rotation_cli_passes_risk_config(monkeypatch: pytest.Monkey
     exit_code = backtest_etf_rotation.main(
         "2026-05-30",
         "2026-05-30",
-        "trend_etf_v1",
+        "trend_etf_momentum_reg20",
+        "etf_mixed",
         5,
         1,
         2,
