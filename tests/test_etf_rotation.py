@@ -55,6 +55,41 @@ def test_resolve_factors_rejects_unsupported_factor_for_etf() -> None:
         resolve_factors(["limit_up"], asset_type="etf_CN")
 
 
+def test_trend_v1_profile_weights_and_factor_set() -> None:
+    profile = get_signal_profile("trend_v1")
+
+    assert profile.factor_names == ["ma_cross", "price_to_ma20", "rsi14"]
+    assert profile.signal_mode == "cross_sectional"
+    assert profile.supported_asset_types == ("stock_CN",)
+    assert [rule.weight for rule in profile.factor_rules] == [0.4, 0.3, 0.3]
+
+
+def test_trend_v1_composite_uses_stock_factor_scores() -> None:
+    profile = get_signal_profile("trend_v1")
+    df = pl.DataFrame(
+        [
+            {
+                "ma_cross": 0.10,
+                "price_to_ma20": 0.05,
+                "rsi14": 65.0,
+                "ma_cross_score": 0.7,
+                "price_to_ma20_score": 0.5,
+                "rsi14_score": 0.8,
+            }
+        ]
+    )
+
+    result = apply_composite_score(df, profile)
+
+    assert result.get_column("composite_score").to_list()[0] == pytest.approx(0.67, abs=1e-6)
+    assert result.get_column("contributors").to_list()[0] == [
+        "trend_structure_strong",
+        "price_above_ma20",
+        "rsi_in_healthy_trend_zone",
+    ]
+    assert result.get_column("label").to_list()[0] == "strong"
+
+
 def test_trend_etf_momentum_reg20_profile_weights_and_factor_set() -> None:
     profile = get_signal_profile("trend_etf_momentum_reg20")
 

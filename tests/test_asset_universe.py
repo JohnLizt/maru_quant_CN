@@ -226,6 +226,37 @@ def test_pipeline_universe_filters_generic_universe_by_asset_type(tmp_path: Path
     ) == {"518880.SH": "黄金ETF华安"}
 
 
+def test_load_universe_requires_asset_type_column_without_default(tmp_path: Path) -> None:
+    asset_types, universes, universes_dir = _config_paths(tmp_path)
+    _write(
+        asset_types,
+        "\n".join(
+            [
+                "asset_type,display_name,data_source,calendar_key,loader_key,pipeline_universe,enabled",
+                "stock_CN,A股股票,tushare,CN,tushare,stock_CN,true",
+            ]
+        ),
+    )
+    _write(universes, "universe,display_name,enabled\nstock_CN,A股股票池,true\n")
+    _write(
+        universes_dir / "stock_CN.csv",
+        "\n".join(
+            [
+                "symbol,name,is_active",
+                "300059.SZ,东方财富,true",
+                "600519.SH,贵州茅台,true",
+            ]
+        ),
+    )
+
+    with pytest.raises(ValueError, match="缺少 asset_type"):
+        load_universe(
+            "stock_CN",
+            universes_path=universes,
+            universes_dir=universes_dir,
+        )
+
+
 def test_write_pipeline_universe_rows_preserves_asset_type_column(tmp_path: Path) -> None:
     asset_types, universes, universes_dir = _config_paths(tmp_path)
     _write(
