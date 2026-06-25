@@ -6,6 +6,8 @@ import os
 import polars as pl
 import tushare as ts
 
+from app.data_loader.base import LoaderCapabilities
+
 
 CAL_SYMBOL = "000001.SZ"
 STOCK_FIELDS = "ts_code,trade_date,open,high,low,close,pct_chg,vol,amount"
@@ -71,6 +73,20 @@ class TushareLoader:
 
     def supports(self, asset_type: str) -> bool:
         return asset_type in SUPPORTED_ASSET_TYPES
+
+    def get_capabilities(self, asset_type: str) -> LoaderCapabilities:
+        self._ensure_supported(asset_type)
+        if asset_type == "stock_CN":
+            return LoaderCapabilities(
+                supports_by_date=True,
+                supports_by_symbol=True,
+                supports_suspended_status=True,
+            )
+        return LoaderCapabilities(
+            supports_by_date=True,
+            supports_by_symbol=True,
+            supports_suspended_status=False,
+        )
 
     def get_trading_dates(self, asset_type: str, start: str, end: str) -> list[str]:
         self._ensure_supported(asset_type)

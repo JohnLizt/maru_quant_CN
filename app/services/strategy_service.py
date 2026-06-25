@@ -26,6 +26,7 @@ def build_strategy_snapshot(
     universe: str | None = None,
     profile_name: str,
     as_of_date: date | None = None,
+    extra_factor_names: list[str] | None = None,
 ) -> StrategySnapshotBundle:
     _, signal_snapshot = build_signal_snapshot(
         symbols=symbols,
@@ -34,6 +35,7 @@ def build_strategy_snapshot(
         asset_type=asset_type,
         universe=universe,
         profile_name=profile_name,
+        extra_factor_names=extra_factor_names,
     )
     decisions = strategy.build_decisions(signal_snapshot, as_of_date=as_of_date)
     return StrategySnapshotBundle(signal_snapshot=signal_snapshot, decisions=decisions)
@@ -47,6 +49,7 @@ def run_strategy_snapshot(
     asset_type: str | None = None,
     universe: str | None = None,
     profile_name: str,
+    extra_factor_names: list[str] | None = None,
 ) -> pl.DataFrame:
     if target_date is None:
         as_of_date = None
@@ -74,6 +77,7 @@ def run_strategy_snapshot(
         universe=universe,
         profile_name=profile_name,
         as_of_date=as_of_date,
+        extra_factor_names=extra_factor_names,
     )
     return bundle.decisions
 
@@ -87,6 +91,7 @@ def run_strategy_history(
     asset_type: str | None = None,
     universe: str | None = None,
     profile_name: str,
+    extra_factor_names: list[str] | None = None,
 ) -> pl.DataFrame:
     bundle = build_strategy_snapshot(
         strategy,
@@ -96,5 +101,6 @@ def run_strategy_history(
         asset_type=asset_type,
         universe=universe,
         profile_name=profile_name,
+        extra_factor_names=extra_factor_names,
     )
     return bundle.decisions

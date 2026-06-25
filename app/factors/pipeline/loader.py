@@ -16,6 +16,7 @@ DEFAULT_SCHEMA = {
     "low": pl.Float64,
     "close": pl.Float64,
     "volume": pl.Int64,
+    "amount": pl.Float64,
     "is_suspended": pl.Boolean,
 }
 
@@ -67,7 +68,7 @@ def load_ohlcv(engine, asset_type: str, symbol: str, start: str, end: str, field
 
     ordered_columns = [
         column
-        for column in ["time", "asset_type", "symbol", "open", "high", "low", "close", "volume", "is_suspended"]
+        for column in ["time", "asset_type", "symbol", "open", "high", "low", "close", "volume", "amount", "is_suspended"]
         if column in requested
     ]
     schema = {column: DEFAULT_SCHEMA[column] for column in ordered_columns}
@@ -105,7 +106,7 @@ def load_ohlcv_panel(
 
     ordered_columns = [
         column
-        for column in ["time", "asset_type", "symbol", "open", "high", "low", "close", "volume", "is_suspended"]
+        for column in ["time", "asset_type", "symbol", "open", "high", "low", "close", "volume", "amount", "is_suspended"]
         if column in requested
     ]
     schema = {column: DEFAULT_SCHEMA[column] for column in ordered_columns}

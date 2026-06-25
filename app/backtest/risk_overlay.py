@@ -49,6 +49,27 @@ def get_risk_reason(
     return None
 
 
+def add_risk_feature_columns(
+    market_data: pl.DataFrame,
+    config: RiskOverlayConfig,
+) -> pl.DataFrame:
+    """Attach rolling volatility and amount CV columns to a single panel slice."""
+
+    close = market_data.get_column("close").cast(pl.Float64)
+    amount = market_data.get_column("amount").cast(pl.Float64)
+    ret = close.pct_change()
+    std_long = ret.rolling_std(window_size=config.std_long_window)
+    std_short = ret.rolling_std(window_size=config.std_short_window)
+    amount_mean = amount.rolling_mean(window_size=config.cv_window)
+    amount_std = amount.rolling_std(window_size=config.cv_window)
+    return market_data.with_columns(
+        [
+            ((std_long + std_short) / 2.0).alias("std_score"),
+            (amount_std / amount_mean).alias("cv"),
+        ]
+    )
+
+
 def build_risk_features(market_data: pl.DataFrame, config: RiskOverlayConfig) -> pl.DataFrame:
     """Compute rolling volatility and amount CV on market daily bars.
 
@@ -66,21 +87,7 @@ def build_risk_features(market_data: pl.DataFrame, config: RiskOverlayConfig) ->
 
     frames: list[pl.DataFrame] = []
     for symbol_df in market_data.sort(sort_keys).partition_by(partition_keys, maintain_order=True):
-        close = symbol_df.get_column("close").cast(pl.Float64)
-        amount = symbol_df.get_column("amount").cast(pl.Float64)
-        ret = close.pct_change()
-        std_long = ret.rolling_std(window_size=config.std_long_window)
-        std_short = ret.rolling_std(window_size=config.std_short_window)
-        amount_mean = amount.rolling_mean(window_size=config.cv_window)
-        amount_std = amount.rolling_std(window_size=config.cv_window)
-        frames.append(
-            symbol_df.with_columns(
-                [
-                    ((std_long + std_short) / 2.0).alias("std_score"),
-                    (amount_std / amount_mean).alias("cv"),
-                ]
-            )
-        )
+        frames.append(add_risk_feature_columns(symbol_df, config))
 
     if not frames:
         return market_data.with_columns(

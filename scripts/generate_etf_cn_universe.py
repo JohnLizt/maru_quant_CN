@@ -15,7 +15,7 @@ import polars as pl
 import tushare as ts
 
 from app.data_loader.providers.tushare import TushareLoader
-from app.services.asset_universe import write_pipeline_universe_rows
+from app.services.asset_universe import write_etl_universe_rows
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -245,7 +245,7 @@ def main() -> None:
     )
 
     if not args.dry_run:
-        write_pipeline_universe_rows("etf_CN", rows)
+        write_etl_universe_rows("etf_CN", rows)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

@@ -83,8 +83,33 @@ def _result_schema(profile: SignalProfile) -> dict[str, pl.DataType]:
     return {key: schema[key] for key in ordered_keys}
 
 
-def _empty_result(profile: SignalProfile) -> pl.DataFrame:
-    return pl.DataFrame(schema=_result_schema(profile))
+def _ordered_factor_names(
+    profile: SignalProfile,
+    extra_factor_names: list[str] | None = None,
+) -> list[str]:
+    ordered = list(profile.factor_names)
+    for factor_name in extra_factor_names or []:
+        if factor_name not in ordered:
+            ordered.append(factor_name)
+    return ordered
+
+
+def _result_schema_with_extras(
+    profile: SignalProfile,
+    extra_factor_names: list[str] | None = None,
+) -> dict[str, pl.DataType]:
+    schema = dict(BASE_SIGNAL_SCHEMA)
+    ordered_factor_names = _ordered_factor_names(profile, extra_factor_names)
+    for factor_name in ordered_factor_names:
+        schema[factor_name] = pl.Float64
+    for factor_name in profile.factor_names:
+        schema[f"{factor_name}_score"] = pl.Float64
+    ordered_keys = ["time", "asset_type", "signal_mode", "symbol", "symbol_name", "tag", *ordered_factor_names, *[f"{name}_score" for name in profile.factor_names], "composite_score", "label", "contributors", "rank"]
+    return {key: schema[key] for key in ordered_keys}
+
+
+def _empty_result(profile: SignalProfile, extra_factor_names: list[str] | None = None) -> pl.DataFrame:
+    return pl.DataFrame(schema=_result_schema_with_extras(profile, extra_factor_names))
 
 
 def _validate_profile_asset_types(profile: SignalProfile, asset_types: set[str]) -> None:
@@ -98,7 +123,7 @@ def _validate_profile_asset_types(profile: SignalProfile, asset_types: set[str])
 
 
 def _query_universe_factors(
-    profile: SignalProfile,
+    factor_names: list[str],
     universe_rows: list[dict[str, str]],
     start: date,
     end: date,
@@ -126,7 +151,7 @@ def _query_universe_factors(
                     {
                         "asset_type": asset_type,
                         "symbols": sorted(set(symbols)),
-                        "factor_names": profile.factor_names,
+                        "factor_names": factor_names,
                         "start_date": start.isoformat(),
                         "end_date": end.isoformat(),
                     },
@@ -149,14 +174,19 @@ def _query_universe_factors(
     ).with_columns(pl.col("factor_value").cast(pl.Float64))
 
 
-def _pivot_factors(df: pl.DataFrame, profile: SignalProfile) -> pl.DataFrame:
+def _pivot_factors(
+    df: pl.DataFrame,
+    *,
+    query_factor_names: list[str],
+    required_factor_names: list[str],
+) -> pl.DataFrame:
     wide = df.pivot(values="factor_value", index=["time", "asset_type", "symbol"], on="factor_name").sort(["time", "symbol"])
 
-    missing_columns = [factor_name for factor_name in profile.factor_names if factor_name not in wide.columns]
+    missing_columns = [factor_name for factor_name in query_factor_names if factor_name not in wide.columns]
     for factor_name in missing_columns:
         wide = wide.with_columns(pl.lit(None).cast(pl.Float64).alias(factor_name))
 
-    validity_checks = [pl.col(name).is_not_null() & pl.col(name).is_finite() for name in profile.factor_names]
+    validity_checks = [pl.col(name).is_not_null() & pl.col(name).is_finite() for name in required_factor_names]
     return wide.filter(pl.all_horizontal(validity_checks))
 
 
@@ -217,6 +247,7 @@ def build_signal_snapshot(
     asset_type: str | None = "stock_CN",
     universe: str | None = None,
     profile_name: str = "trend_etf_momentum_reg20",
+    extra_factor_names: list[str] | None = None,
 ) -> tuple[SignalProfile, pl.DataFrame]:
     """Return full-universe signal ranking table for the requested profile."""
 
@@ -230,14 +261,19 @@ def build_signal_snapshot(
     universe_rows = resolve_universe_rows(target_universe, default_asset_type=default_asset_type)
     universe_asset_types = {row["asset_type"] for row in universe_rows}
     _validate_profile_asset_types(profile, universe_asset_types)
+    query_factor_names = _ordered_factor_names(profile, extra_factor_names)
 
-    raw_factors = _query_universe_factors(profile, universe_rows, start, end)
+    raw_factors = _query_universe_factors(query_factor_names, universe_rows, start, end)
     if raw_factors.is_empty():
-        return profile, _empty_result(profile)
+        return profile, _empty_result(profile, extra_factor_names)
 
     scored = (
         raw_factors
-        .pipe(_pivot_factors, profile=profile)
+        .pipe(
+            _pivot_factors,
+            query_factor_names=query_factor_names,
+            required_factor_names=list(profile.factor_names),
+        )
         .pipe(_filter_to_universe, universe_rows=universe_rows)
         .pipe(apply_signal_profile, profile=profile)
         .pipe(_smooth_factor_scores, profile=profile)
@@ -252,7 +288,7 @@ def build_signal_snapshot(
             "symbol",
             "symbol_name",
             "tag",
-            *profile.factor_names,
+            *query_factor_names,
             *[f"{factor_name}_score" for factor_name in profile.factor_names],
             "composite_score",
             "label",
@@ -266,9 +302,9 @@ def build_signal_snapshot(
         scored = scored.filter(pl.col("symbol").is_in(normalized_symbols))
 
     if scored.is_empty():
-        return profile, _empty_result(profile)
+        return profile, _empty_result(profile, extra_factor_names)
 
-    return profile, scored.cast(_result_schema(profile))
+    return profile, scored.cast(_result_schema_with_extras(profile, extra_factor_names))
 
 
 def query_signal_rankings(
@@ -279,6 +315,7 @@ def query_signal_rankings(
     asset_type: str | None = "stock_CN",
     universe: str | None = None,
     profile_name: str = "trend_etf_momentum_reg20",
+    extra_factor_names: list[str] | None = None,
 ) -> tuple[SignalProfile, pl.DataFrame]:
     """Backward-compatible alias for build_signal_snapshot."""
 
@@ -289,6 +326,7 @@ def query_signal_rankings(
         asset_type=asset_type,
         universe=universe,
         profile_name=profile_name,
+        extra_factor_names=extra_factor_names,
     )
 
 
@@ -301,6 +339,7 @@ def query_signal_scores(
     universe: str | None = None,
     profile_name: str = "trend_etf_momentum_reg20",
     top_n: int | None = None,
+    extra_factor_names: list[str] | None = None,
 ) -> tuple[SignalProfile, pl.DataFrame]:
     """Query composite signal scores over the full factor universe."""
 
@@ -311,6 +350,7 @@ def query_signal_scores(
         asset_type=asset_type,
         universe=universe,
         profile_name=profile_name,
+        extra_factor_names=extra_factor_names,
     )
 
     if scored.is_empty():

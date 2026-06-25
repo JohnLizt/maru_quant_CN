@@ -19,20 +19,25 @@ from app.strategy.etf_rotation import ETFUniverseRotationStrategy
 
 def _to_result_rows(signal_snapshot, top_n: int) -> list[dict]:
     results = []
+    excluded_columns = {"time", "asset_type", "signal_mode", "symbol", "symbol_name", "tag", "composite_score", "label", "contributors", "rank"}
+    raw_factor_names = [
+        name for name in signal_snapshot.columns
+        if name not in excluded_columns
+        and not (name.endswith("_score") and name[:-6] in signal_snapshot.columns)
+    ]
+    normalized_factor_names = [
+        factor_name for factor_name in raw_factor_names
+        if f"{factor_name}_score" in signal_snapshot.columns
+    ]
     for row in signal_snapshot.filter(signal_snapshot["rank"] <= top_n).iter_rows(named=True):
-        factor_names = [
-            name for name in signal_snapshot.columns
-            if not name.endswith("_score")
-            and name not in {"time", "asset_type", "signal_mode", "symbol", "symbol_name", "tag", "composite_score", "label", "contributors", "rank"}
-        ]
         results.append({
             "time": row["time"].isoformat() if row["time"] is not None else None,
             "symbol": row["symbol"],
             "symbol_name": row.get("symbol_name", ""),
             "tag": row.get("tag", ""),
             "signal_mode": row.get("signal_mode"),
-            "raw_factors": {factor_name: row.get(factor_name) for factor_name in factor_names},
-            "normalized_factors": {factor_name: row.get(f"{factor_name}_score") for factor_name in factor_names},
+            "raw_factors": {factor_name: row.get(factor_name) for factor_name in raw_factor_names},
+            "normalized_factors": {factor_name: row.get(f"{factor_name}_score") for factor_name in normalized_factor_names},
             "composite_score": row["composite_score"],
             "label": row["label"],
             "contributors": row["contributors"],
@@ -70,6 +75,7 @@ def main(date: str | None, top_n: int, profile_name: str, universe: str) -> int:
         universe=universe,
         profile_name=profile_name,
         as_of_date=as_of_date,
+        extra_factor_names=["std_score", "cv"],
     )
     payload = {
         "query": {

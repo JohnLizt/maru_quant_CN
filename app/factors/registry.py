@@ -16,6 +16,7 @@ from app.factors.momentum import (
     Ret60Factor,
     Ret60RankFactor,
 )
+from app.factors.risk import CVFactor, StdScoreFactor
 from app.factors.technical import (
     MACDNormFactor,
     MACrossGactor,
@@ -40,6 +41,8 @@ DEFAULT_FACTORS: list[BaseFactor] = [
     Ret30RankFactor(),
     Ret60Factor(),
     Ret60RankFactor(),
+    StdScoreFactor(),
+    CVFactor(),
     LimitUpFactor(),
 ]
 

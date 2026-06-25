@@ -35,7 +35,7 @@ from app.factors.registry import (
     resolve_factors,
     time_series_factors,
 )
-from app.services.asset_universe import list_asset_types, resolve_pipeline_symbols
+from app.services.asset_universe import list_asset_types, resolve_etl_symbols
 from app.utils.db import get_engine
 
 RATE_LIMIT = 0.05
@@ -75,7 +75,7 @@ def _run_for_asset_type(
     factors = resolve_factors(factor_names, asset_type=asset_type)
     ts_factors = time_series_factors(factors)
     cs_factors = cross_sectional_factors(factors)
-    symbols = resolve_pipeline_symbols(asset_type)
+    symbols = resolve_etl_symbols(asset_type)
     market_dates = get_market_dates(engine, start_str, end_str, asset_type)
 
     logger.info(

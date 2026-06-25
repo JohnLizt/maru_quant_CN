@@ -28,16 +28,25 @@ class ValidationResult:
     issues: list[ValidationIssue]
 
 
-def _expected_counts(engine, asset_type: str, start: str, end: str, symbols: list[str], suspended_policy: str) -> dict[str, int]:
+def _expected_counts(engine, asset_type: str, start: str, end: str, symbols: list[str], factor: BaseFactor) -> dict[str, int]:
     sql = """
+        WITH eligible_rows AS (
+            SELECT time,
+                   symbol,
+                   is_suspended,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY time) AS history_index
+            FROM market.daily
+            WHERE asset_type = :asset_type
+              AND time <= :end
+              AND symbol = ANY(:symbols)
+        )
         SELECT TO_CHAR(time AT TIME ZONE 'UTC', 'YYYYMMDD') AS trade_date,
                COUNT(DISTINCT symbol) AS symbol_count
-        FROM market.daily
-        WHERE asset_type = :asset_type
-          AND time >= :start AND time <= :end
-          AND symbol = ANY(:symbols)
+        FROM eligible_rows
+        WHERE time >= :start
+          AND history_index >= :warmup_days
     """
-    if suspended_policy == "mask":
+    if factor.suspended_policy == "mask":
         sql += " AND NOT is_suspended"
     sql += " GROUP BY trade_date"
 
@@ -49,6 +58,7 @@ def _expected_counts(engine, asset_type: str, start: str, end: str, symbols: lis
                 "start": _iso(start),
                 "end": _iso(end),
                 "symbols": symbols,
+                "warmup_days": factor.warmup_days,
             },
         ).fetchall()
     return {r[0]: int(r[1]) for r in rows}
@@ -137,15 +147,15 @@ def validate_factor_completeness(
     start, end = target_dates[0], target_dates[-1]
     actual_counts = _actual_counts(engine, asset_type, start, end, symbols, [factor.name for factor in factors])
 
-    expected_by_policy = {
-        policy: _expected_counts(engine, asset_type, start, end, symbols, policy)
-        for policy in {factor.suspended_policy for factor in factors}
+    expected_by_factor = {
+        factor.name: _expected_counts(engine, asset_type, start, end, symbols, factor)
+        for factor in factors
     }
 
     issues: list[ValidationIssue] = []
     for trade_date in target_dates:
         for factor in factors:
-            expected = expected_by_policy[factor.suspended_policy].get(trade_date, 0)
+            expected = expected_by_factor[factor.name].get(trade_date, 0)
             actual = actual_counts.get((trade_date, factor.name), 0)
             if actual != expected:
                 issues.append(

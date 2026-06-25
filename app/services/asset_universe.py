@@ -13,6 +13,7 @@ if not CONFIG_DIR.exists():
 ASSET_TYPES_CSV = CONFIG_DIR / "asset_types.csv"
 UNIVERSES_CSV = CONFIG_DIR / "universes.csv"
 UNIVERSES_DIR = CONFIG_DIR / "universes"
+ETL_UNIVERSES_DIR = CONFIG_DIR / "etl_universes"
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,10 @@ class AssetTypeConfig:
     data_source: str
     calendar_key: str
     loader_key: str
-    pipeline_universe: str
+    etl_universe: str
+    etl_fetch_mode: str
+    strict_date_coverage: bool
+    fill_missing_as_suspended: bool
     enabled: bool
 
 
@@ -106,7 +110,10 @@ def _asset_type_from_row(row: dict[str, str]) -> AssetTypeConfig:
     data_source = str(row.get("data_source", "")).strip()
     calendar_key = str(row.get("calendar_key", "")).strip()
     loader_key = str(row.get("loader_key", "")).strip()
-    pipeline_universe = normalize_universe(str(row.get("pipeline_universe", "")))
+    etl_universe = normalize_universe(str(row.get("etl_universe", "")))
+    etl_fetch_mode = str(row.get("etl_fetch_mode", "")).strip().lower()
+    strict_date_coverage = _parse_bool(row.get("strict_date_coverage"), field_name="strict_date_coverage")
+    fill_missing_as_suspended = _parse_bool(row.get("fill_missing_as_suspended"), field_name="fill_missing_as_suspended")
     enabled = _parse_bool(row.get("enabled"), field_name="enabled")
     if not display_name:
         raise ValueError(f"asset_types.csv 配置缺少 display_name: {asset_type}")
@@ -122,7 +129,10 @@ def _asset_type_from_row(row: dict[str, str]) -> AssetTypeConfig:
         data_source=data_source,
         calendar_key=calendar_key,
         loader_key=loader_key,
-        pipeline_universe=pipeline_universe,
+        etl_universe=etl_universe,
+        etl_fetch_mode=etl_fetch_mode,
+        strict_date_coverage=strict_date_coverage,
+        fill_missing_as_suspended=fill_missing_as_suspended,
         enabled=enabled,
     )
 
@@ -190,6 +200,10 @@ def _resolve_universe_path(universe: str, universes_dir: Path = UNIVERSES_DIR) -
     return universes_dir / f"{normalize_universe(universe)}.csv"
 
 
+def _resolve_etl_universe_path(universe: str, universes_dir: Path = ETL_UNIVERSES_DIR) -> Path:
+    return universes_dir / f"{normalize_universe(universe)}.csv"
+
+
 def _infer_row_asset_type(default_asset_type: str | None, raw_asset_type: str | None) -> str:
     explicit = str(raw_asset_type or "").strip()
     if explicit:
@@ -238,6 +252,46 @@ def _read_universe_rows(
 
     if not normalized_rows:
         raise ValueError(f"universe 文件为空: {path}")
+    return normalized_rows
+
+
+def _read_etl_universe_rows(
+    universe: str,
+    *,
+    universes_dir: Path = ETL_UNIVERSES_DIR,
+    default_asset_type: str | None = None,
+) -> list[dict[str, str]]:
+    path = _resolve_etl_universe_path(universe, universes_dir)
+    rows = _read_csv_rows(path)
+
+    normalized_rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        symbol_raw = str(row.get("symbol", "")).strip()
+        if not symbol_raw:
+            raise ValueError(f"etl universe 文件存在空 symbol: {path}")
+        asset_type = _infer_row_asset_type(default_asset_type, row.get("asset_type"))
+        symbol = normalize_symbol_for_asset_type(asset_type, symbol_raw)
+        key = (asset_type, symbol)
+        if key in seen:
+            raise ValueError(f"etl universe 文件存在重复成员: {asset_type}:{symbol} | {path}")
+        seen.add(key)
+
+        is_active = _parse_bool(row.get("is_active", "true"), field_name="is_active")
+        normalized_row = {
+            "asset_type": asset_type,
+            "symbol": symbol,
+            "name": _normalize_name(row.get("name")),
+            "is_active": "true" if is_active else "false",
+        }
+        for key_name, value in row.items():
+            if key_name in {"asset_type", "symbol", "name", "is_active"}:
+                continue
+            normalized_row[str(key_name).strip()] = _normalize_tag(value)
+        normalized_rows.append(normalized_row)
+
+    if not normalized_rows:
+        raise ValueError(f"etl universe 文件为空: {path}")
     return normalized_rows
 
 
@@ -331,77 +385,69 @@ def get_universe_symbol_tag_map(
     }
 
 
-def load_pipeline_universe(
+def load_etl_universe(
     asset_type: str,
     *,
-    universes_dir: Path = UNIVERSES_DIR,
+    universes_dir: Path = ETL_UNIVERSES_DIR,
     path: Path = ASSET_TYPES_CSV,
-    universes_path: Path = UNIVERSES_CSV,
 ) -> list[dict[str, str]]:
     config = get_asset_type_config(asset_type, path=path)
-    rows = load_universe(
-        config.pipeline_universe,
-        universes_path=universes_path,
+    rows = _read_etl_universe_rows(
+        config.etl_universe,
         universes_dir=universes_dir,
         default_asset_type=config.asset_type,
     )
     normalized_asset_type = normalize_asset_type(asset_type)
     filtered = [row for row in rows if row["asset_type"] == normalized_asset_type]
     if not filtered:
-        raise ValueError(f"asset_type={config.asset_type} 的 pipeline universe 无 active 标的")
+        raise ValueError(f"asset_type={config.asset_type} 的 etl universe 无 active 标的")
     return filtered
 
 
-def resolve_pipeline_symbols(
+def resolve_etl_symbols(
     asset_type: str,
     *,
-    universes_dir: Path = UNIVERSES_DIR,
+    universes_dir: Path = ETL_UNIVERSES_DIR,
     path: Path = ASSET_TYPES_CSV,
-    universes_path: Path = UNIVERSES_CSV,
 ) -> list[str]:
     return [
         row["symbol"]
-        for row in load_pipeline_universe(
+        for row in load_etl_universe(
             asset_type,
             universes_dir=universes_dir,
             path=path,
-            universes_path=universes_path,
         )
     ]
 
 
-def get_pipeline_symbol_name_map(
+def get_etl_symbol_name_map(
     asset_type: str,
     *,
-    universes_dir: Path = UNIVERSES_DIR,
+    universes_dir: Path = ETL_UNIVERSES_DIR,
     path: Path = ASSET_TYPES_CSV,
-    universes_path: Path = UNIVERSES_CSV,
 ) -> dict[str, str]:
     return {
         row["symbol"]: row["name"]
-        for row in load_pipeline_universe(
+        for row in load_etl_universe(
             asset_type,
             universes_dir=universes_dir,
             path=path,
-            universes_path=universes_path,
         )
     }
 
 
-def get_pipeline_symbol_tag_map(
+def get_etl_symbol_tag_map(
     asset_type: str,
     *,
-    universes_dir: Path = UNIVERSES_DIR,
+    universes_dir: Path = ETL_UNIVERSES_DIR,
     path: Path = ASSET_TYPES_CSV,
-    universes_path: Path = UNIVERSES_CSV,
 ) -> dict[str, str]:
     return {
         row["symbol"]: str(row.get("tag", "")).strip()
-        for row in load_pipeline_universe(
+        for row in load_etl_universe(
             asset_type,
             universes_dir=universes_dir,
             path=path,
-            universes_path=universes_path,
         )
     }
 
@@ -462,13 +508,12 @@ def write_universe_rows(
     )
 
 
-def write_pipeline_universe_rows(
+def write_etl_universe_rows(
     asset_type: str,
     rows: list[dict[str, str | bool]],
     *,
-    universes_dir: Path = UNIVERSES_DIR,
+    universes_dir: Path = ETL_UNIVERSES_DIR,
     path: Path = ASSET_TYPES_CSV,
-    universes_path: Path = UNIVERSES_CSV,
 ) -> list[dict[str, str]]:
     config = get_asset_type_config(asset_type, path=path)
     normalized_asset_type = normalize_asset_type(asset_type)
@@ -478,16 +523,54 @@ def write_pipeline_universe_rows(
         current["asset_type"] = normalize_asset_type(str(current.get("asset_type", normalized_asset_type)) or normalized_asset_type)
         normalized_rows.append(current)
 
-    write_universe_rows(
-        config.pipeline_universe,
-        normalized_rows,
-        universes_path=universes_path,
-        universes_dir=universes_dir,
-        default_asset_type=config.asset_type,
-    )
-    return load_pipeline_universe(
+    target = _resolve_etl_universe_path(config.etl_universe, universes_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    normalized_output_rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    extra_fieldnames: set[str] = set()
+    for row in normalized_rows:
+        current_asset_type = _infer_row_asset_type(config.asset_type, row.get("asset_type"))
+        symbol = normalize_symbol_for_asset_type(current_asset_type, str(row.get("symbol", "")))
+        key = (current_asset_type, symbol)
+        if key in seen:
+            raise ValueError(f"写入 etl universe 时发现重复成员: {current_asset_type}:{symbol}")
+        seen.add(key)
+        normalized_row = {
+            "asset_type": current_asset_type,
+            "symbol": symbol,
+            "name": _normalize_name(str(row.get("name", ""))),
+            "is_active": "true" if _parse_bool(row.get("is_active", "true"), field_name="is_active") else "false",
+        }
+        for key_name, value in row.items():
+            normalized_key = str(key_name).strip()
+            if normalized_key in {"asset_type", "symbol", "name", "is_active"} or not normalized_key:
+                continue
+            normalized_row[normalized_key] = _normalize_tag(str(value))
+            extra_fieldnames.add(normalized_key)
+        normalized_output_rows.append(normalized_row)
+
+    if not normalized_output_rows:
+        raise ValueError(f"asset_type={asset_type} 的 etl universe 不能为空")
+
+    normalized_output_rows.sort(key=lambda current: (current["asset_type"], current["symbol"]))
+    with target.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["asset_type", "symbol", "name", "is_active", *sorted(extra_fieldnames)],
+        )
+        writer.writeheader()
+        writer.writerows(normalized_output_rows)
+
+    return load_etl_universe(
         asset_type,
         universes_dir=universes_dir,
         path=path,
-        universes_path=universes_path,
     )
+
+
+load_pipeline_universe = load_etl_universe
+resolve_pipeline_symbols = resolve_etl_symbols
+get_pipeline_symbol_name_map = get_etl_symbol_name_map
+get_pipeline_symbol_tag_map = get_etl_symbol_tag_map
+write_pipeline_universe_rows = write_etl_universe_rows

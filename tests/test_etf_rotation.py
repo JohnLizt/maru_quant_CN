@@ -48,6 +48,7 @@ def test_resolve_factors_filters_by_asset_type() -> None:
     assert "limit_up" in stock_factors
     assert "limit_up" not in etf_factors
     assert {"price_to_ma20", "ma_cross", "rsi14", "macd_norm"}.issubset(etf_factors)
+    assert {"std_score", "cv"}.issubset(etf_factors)
 
 
 def test_resolve_factors_rejects_unsupported_factor_for_etf() -> None:
@@ -840,3 +841,66 @@ def test_backtest_etf_rotation_cli_passes_risk_config(monkeypatch: pytest.Monkey
     assert risk_config.cv_threshold == pytest.approx(0.6)
     assert risk_config.stop_loss_rate == pytest.approx(0.12)
     assert risk_config.half_weight == pytest.approx(0.4)
+
+
+def test_query_etf_rotation_requests_extra_display_factors(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from app.cli import query_etf_rotation
+
+    ts = datetime(2026, 6, 23, tzinfo=timezone.utc)
+    captured: dict[str, object] = {}
+
+    def _fake_build_strategy_snapshot(*args, **kwargs):
+        captured.update(kwargs)
+        return StrategySnapshotBundle(
+            signal_snapshot=pl.DataFrame(
+                [
+                    {
+                        "time": ts,
+                        "asset_type": "etf_CN",
+                        "signal_mode": "cross_sectional",
+                        "symbol": "159915.SZ",
+                        "symbol_name": "创业板ETF易方达",
+                        "tag": "growth_index",
+                        "momentum_reg_20_rank": 1.0,
+                        "std_score": 0.041,
+                        "cv": 0.62,
+                        "momentum_reg_20_rank_score": 1.0,
+                        "composite_score": 1.0,
+                        "label": "strong",
+                        "contributors": ["mixed_signal"],
+                        "rank": 1,
+                    }
+                ]
+            ),
+            decisions=pl.DataFrame(
+                [
+                    {
+                        "time": ts,
+                        "asset_type": "etf_CN",
+                        "strategy": "etf_rotation_v1",
+                        "strategy_mode": "cross_sectional",
+                        "symbol": "159915.SZ",
+                        "decision_type": "target_weight",
+                        "signal": 1,
+                        "target_weight": 0.25,
+                        "score": 1.0,
+                        "rank": 1,
+                        "tag": "growth_index",
+                        "metadata": json.dumps({"rank": 1, "tag": "growth_index", "profile": "trend_etf_momentum_reg20"}),
+                    }
+                ]
+            ),
+        )
+
+    monkeypatch.setattr(query_etf_rotation, "build_strategy_snapshot", _fake_build_strategy_snapshot)
+
+    assert query_etf_rotation.main("2026-06-23", 4, "trend_etf_momentum_reg20", "etf_mixed") == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert captured["extra_factor_names"] == ["std_score", "cv"]
+    assert payload["results"][0]["raw_factors"]["std_score"] == pytest.approx(0.041)
+    assert payload["results"][0]["raw_factors"]["cv"] == pytest.approx(0.62)
+    assert "std_score_score" not in payload["results"][0]["normalized_factors"]
