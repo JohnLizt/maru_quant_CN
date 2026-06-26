@@ -14,6 +14,7 @@ from app.services.asset_universe import (
     list_universes,
     load_etl_universe,
     load_universe,
+    normalize_symbol_for_asset_type,
     resolve_etl_symbols,
     resolve_universe_symbols,
     write_etl_universe_rows,
@@ -223,6 +224,34 @@ def test_etl_universe_filters_generic_universe_by_asset_type(tmp_path: Path) -> 
         path=asset_types,
         universes_dir=etl_universes_dir,
     ) == {"518880.SH": "黄金ETF华安"}
+
+
+def test_etl_universe_supports_us_tickers_without_exchange_suffix(tmp_path: Path) -> None:
+    asset_types, universes, universes_dir, etl_universes_dir = _config_paths(tmp_path)
+    _write(
+        asset_types,
+        "\n".join(
+            [
+                "asset_type,display_name,data_source,calendar_key,loader_key,etl_universe,etl_fetch_mode,strict_date_coverage,fill_missing_as_suspended,enabled",
+                "etf_US,美股ETF,yahoo,US,yahoo,etf_US,by_symbol,true,false,false",
+            ]
+        ),
+    )
+    _write(
+        etl_universes_dir / "etf_US.csv",
+        "\n".join(
+            [
+                "asset_type,symbol,name,is_active,tag",
+                "etf_US,spy,SPDR S&P 500 ETF Trust,true,broad_market",
+            ]
+        ),
+    )
+
+    rows = load_etl_universe("etf_US", path=asset_types, universes_dir=etl_universes_dir)
+
+    assert rows[0]["symbol"] == "SPY"
+    assert resolve_etl_symbols("etf_US", path=asset_types, universes_dir=etl_universes_dir) == ["SPY"]
+    assert normalize_symbol_for_asset_type("etf_US", "spy") == "SPY"
 
 
 def test_load_universe_requires_asset_type_column_without_default(tmp_path: Path) -> None:

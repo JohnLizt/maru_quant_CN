@@ -129,17 +129,27 @@ def main(
 
     backtest_result = bundle.backtest_result
 
-    if save_artifacts:
-        backtest_result = export_backtest_artifacts(
-            backtest_result,
-            artifacts_dir=run_dir,
-            chart_title="ETF Rotation Equity Curve",
-            chart_subtitle=(
-                f"weekly | weekday={rebalance_weekday} | top_n={top_n} | "
-                f"max_per_tag={max_per_tag} | fees={commission_bps + slippage_bps}bps"
-            ),
-            save_chart=save_chart,
-        )
+    backtest_result = export_backtest_artifacts(
+        backtest_result,
+        artifacts_dir=run_dir,
+        chart_title="ETF Rotation Equity Curve",
+        chart_subtitle=(
+            f"weekly | weekday={rebalance_weekday} | top_n={top_n} | "
+            f"max_per_tag={max_per_tag} | fees={commission_bps + slippage_bps}bps"
+        ),
+        save_chart=save_artifacts and save_chart,
+        write_artifacts=save_artifacts,
+        summary_context={
+            "start_date": start_date,
+            "end_date": end_date,
+            "universe": universe,
+            "profile_name": profile_name,
+            "top_n": top_n,
+            "max_per_tag": max_per_tag,
+            "total_fee_bps": commission_bps + slippage_bps,
+            "risk_control": risk_control,
+        },
+    )
 
     payload = {
         "query": {
@@ -177,6 +187,7 @@ def main(
         "artifacts_dir": backtest_result.artifacts_dir,
         "equity_chart_path": backtest_result.equity_chart_path,
         "artifact_paths": backtest_result.artifact_paths or {},
+        "summary_preview": backtest_result.analysis_summary or {},
         "sample_decisions": _to_compact_rows(bundle.decisions_df, 5),
         "sample_returns": _to_compact_rows(backtest_result.returns_df, 10),
     }
@@ -233,7 +244,7 @@ if __name__ == "__main__":
         default="trend_etf_momentum_reg20",
         help="ETF signal profile，默认 trend_etf_momentum_reg20",
     )
-    parser.add_argument("--universe", default="etf_mixed", help="策略池，默认 etf_mixed")
+    parser.add_argument("--universe", default="etf_rotation_CN", help="策略池，默认 etf_rotation_CN")
     parser.add_argument("--top-n", type=int, default=4, help="持仓数量，默认 4")
     parser.add_argument("--max-per-tag", type=int, default=1, help="同 tag 最大持仓数，默认 1")
     parser.add_argument("--rebalance-weekday", type=int, default=2, help="周调仓日，Python weekday 语义，周一=0，默认周三=2")

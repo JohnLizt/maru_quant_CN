@@ -12,8 +12,9 @@ if not CONFIG_DIR.exists():
     CONFIG_DIR = _REPO_ROOT / "config"
 ASSET_TYPES_CSV = CONFIG_DIR / "asset_types.csv"
 UNIVERSES_CSV = CONFIG_DIR / "universes.csv"
-UNIVERSES_DIR = CONFIG_DIR / "universes"
+STRATEGY_UNIVERSES_DIR = CONFIG_DIR / "strategy_universes"
 ETL_UNIVERSES_DIR = CONFIG_DIR / "etl_universes"
+UNIVERSES_DIR = STRATEGY_UNIVERSES_DIR
 
 
 @dataclass(frozen=True)

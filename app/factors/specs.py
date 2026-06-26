@@ -9,7 +9,7 @@ from typing import Literal
 
 FactorCategory = Literal["time_series", "cross_sectional"]
 SuspendedPolicy = Literal["allow", "mask"]
-AssetTypeName = Literal["stock_CN", "etf_CN", "stock_US"]
+AssetTypeName = Literal["stock_CN", "etf_CN", "stock_US", "etf_US"]
 
 
 @dataclass(frozen=True)

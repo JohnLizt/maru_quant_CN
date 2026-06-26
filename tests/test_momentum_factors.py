@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import polars as pl
 
 from app.factors.momentum import MomentumReg20Factor, MomentumReg20RankFactor
+from app.factors.registry import resolve_factors
 
 
 def _build_time(index: int) -> datetime:
@@ -56,3 +57,15 @@ def test_momentum_reg_20_rank_maps_cross_section_to_unit_interval() -> None:
     assert latest.height == 3
     values = latest.get_column("factor_value").to_list()
     assert values == [0.0, 0.5, 1.0]
+
+
+def test_resolve_factors_supports_momentum_reg_20_for_etf_us() -> None:
+    factors = resolve_factors(["momentum_reg_20"], asset_type="etf_US")
+
+    assert [factor.name for factor in factors] == ["momentum_reg_20"]
+
+
+def test_resolve_factors_supports_momentum_reg_20_rank_for_etf_us() -> None:
+    factors = resolve_factors(["momentum_reg_20_rank"], asset_type="etf_US")
+
+    assert [factor.name for factor in factors] == ["momentum_reg_20_rank"]

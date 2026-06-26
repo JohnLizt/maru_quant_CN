@@ -61,6 +61,12 @@ def _resolve_asset_types(selected_asset_types: list[str] | None) -> list[str]:
     return [config.asset_type for config in list_asset_types(enabled_only=True)]
 
 
+def _warmup_start(yyyymmdd: str, trading_days: int) -> str:
+    dt = datetime.strptime(yyyymmdd, "%Y%m%d")
+    # `warmup_days` is expressed in trading days, so add a calendar-day buffer.
+    return _yyyymmdd(dt - timedelta(days=trading_days * 2 + 10))
+
+
 def _run_for_asset_type(
     engine,
     asset_type: str,
@@ -109,7 +115,7 @@ def _run_for_asset_type(
 
     gap_start = missing[0]
     warmup_days = max_warmup_days(factors)
-    warmup_start = _yyyymmdd(datetime.strptime(gap_start, "%Y%m%d") - timedelta(days=warmup_days))
+    warmup_start = _warmup_start(gap_start, warmup_days)
     market_fields = required_market_fields(factors)
 
     logger.info(

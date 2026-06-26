@@ -2,3 +2,4 @@ asset_type,display_name,data_source,calendar_key,loader_key,etl_universe,etl_fet
 stock_CN,A股股票,tushare,CN,tushare,stock_CN,by_date,true,true,true
 etf_CN,A股ETF,tushare,CN,tushare,etf_CN,auto,true,false,true
 stock_US,美股,yahoo,US,yahoo,stock_US,by_symbol,true,false,false
+etf_US,美股ETF,yahoo,US,yahoo,etf_US,by_symbol,true,false,true

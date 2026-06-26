@@ -109,6 +109,6 @@ if __name__ == "__main__":
         default="trend_etf_momentum_reg20",
         help="ETF signal profile，默认 trend_etf_momentum_reg20",
     )
-    parser.add_argument("--universe", default="etf_mixed", help="策略池，默认 etf_mixed")
+    parser.add_argument("--universe", default="etf_rotation_CN", help="策略池，默认 etf_rotation_CN")
     args = parser.parse_args()
     raise SystemExit(main(args.date, args.top, args.profile, args.universe))

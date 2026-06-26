@@ -23,6 +23,10 @@ class BacktestResult:
     returns_df: pl.DataFrame
     equity_curve_df: pl.DataFrame
     metrics: dict[str, float]
+    effective_decisions_df: pl.DataFrame | None = None
+    rebalance_periods_df: pl.DataFrame | None = None
+    rebalance_period_holdings_df: pl.DataFrame | None = None
+    analysis_summary: dict[str, Any] | None = None
     log_path: str | None = None
     artifacts_dir: str | None = None
     equity_chart_path: str | None = None
@@ -416,6 +420,7 @@ def run_backtest(
             returns_df=empty_returns,
             equity_curve_df=empty_returns.with_columns(pl.lit(1.0).alias("equity_curve")),
             metrics={},
+            effective_decisions_df=pl.DataFrame(),
         )
 
     decision_asset_types = sorted({
@@ -438,6 +443,7 @@ def run_backtest(
             returns_df=empty_returns,
             equity_curve_df=empty_returns.with_columns(pl.lit(1.0).alias("equity_curve")),
             metrics={},
+            effective_decisions_df=effective_decisions,
         )
 
     tracked_instruments = (
@@ -787,6 +793,7 @@ def run_backtest(
         returns_df=returns_df,
         equity_curve_df=equity_curve_df.select(["time", "gross_return", "turnover", "cost", "net_return", "equity_curve"]),
         metrics=metrics,
+        effective_decisions_df=effective_decisions.sort(["effective_date", "rank", "symbol"]),
     )
 
 

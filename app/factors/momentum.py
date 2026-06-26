@@ -151,7 +151,7 @@ class MomentumReg20Factor(TimeSeriesFactor):
         required_fields=("close",),
         ic_min_cross_section=20,
         description="20-day weighted log-price regression annualized return multiplied by R^2",
-        supported_asset_types=("stock_CN", "etf_CN"),
+        supported_asset_types=("stock_CN", "etf_CN", "etf_US"),
     )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -274,7 +274,7 @@ class MomentumReg20RankFactor(CrossSectionalFactor):
         required_fields=("close",),
         ic_min_cross_section=20,
         description="cross-sectional percentile rank of momentum_reg_20 mapped to [0, 1]",
-        supported_asset_types=("stock_CN", "etf_CN"),
+        supported_asset_types=("stock_CN", "etf_CN", "etf_US"),
     )
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
