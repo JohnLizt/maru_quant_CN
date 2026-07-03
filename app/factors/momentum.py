@@ -7,7 +7,7 @@ import numpy as np
 import polars as pl
 
 from app.factors.base import CrossSectionalFactor, TimeSeriesFactor
-from app.factors.specs import FactorSpec
+from app.factors.specs import get_factor_spec
 
 
 def _clean(result: pl.DataFrame) -> pl.DataFrame:
@@ -75,16 +75,7 @@ class Ret10Factor(_BaseReturnFactor):
 
     window = 10
 
-    spec = FactorSpec(
-        name="ret_10",
-        category="time_series",
-        warmup_days=20,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="close / close.shift(10) - 1",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("ret_10")
 
 
 class Ret20Factor(_BaseReturnFactor):
@@ -92,16 +83,7 @@ class Ret20Factor(_BaseReturnFactor):
 
     window = 20
 
-    spec = FactorSpec(
-        name="ret_20",
-        category="time_series",
-        warmup_days=30,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="close / close.shift(20) - 1",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("ret_20")
 
 
 class Ret30Factor(_BaseReturnFactor):
@@ -109,16 +91,7 @@ class Ret30Factor(_BaseReturnFactor):
 
     window = 30
 
-    spec = FactorSpec(
-        name="ret_30",
-        category="time_series",
-        warmup_days=50,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="close / close.shift(30) - 1",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("ret_30")
 
 
 class Ret60Factor(_BaseReturnFactor):
@@ -126,16 +99,7 @@ class Ret60Factor(_BaseReturnFactor):
 
     window = 60
 
-    spec = FactorSpec(
-        name="ret_60",
-        category="time_series",
-        warmup_days=100,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="close / close.shift(60) - 1",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("ret_60")
 
 
 class MomentumReg20Factor(TimeSeriesFactor):
@@ -143,16 +107,7 @@ class MomentumReg20Factor(TimeSeriesFactor):
 
     lookback_days = 20
 
-    spec = FactorSpec(
-        name="momentum_reg_20",
-        category="time_series",
-        warmup_days=30,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="20-day weighted log-price regression annualized return multiplied by R^2",
-        supported_asset_types=("stock_CN", "etf_CN", "etf_US"),
-    )
+    spec = get_factor_spec("momentum_reg_20")
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         close_values = df.get_column("close").cast(pl.Float64).to_list()
@@ -164,16 +119,7 @@ class MomentumReg20Factor(TimeSeriesFactor):
 class Ret10RankFactor(CrossSectionalFactor):
     """10-day return percentile rank within each trading day."""
 
-    spec = FactorSpec(
-        name="ret_10_rank",
-        category="cross_sectional",
-        warmup_days=20,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="cross-sectional percentile rank of ret_10 mapped to [0, 1]",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("ret_10_rank")
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         result = (
@@ -189,16 +135,7 @@ class Ret10RankFactor(CrossSectionalFactor):
 class Ret20RankFactor(CrossSectionalFactor):
     """20-day return percentile rank within each trading day."""
 
-    spec = FactorSpec(
-        name="ret_20_rank",
-        category="cross_sectional",
-        warmup_days=30,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="cross-sectional percentile rank of ret_20 mapped to [0, 1]",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("ret_20_rank")
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         result = (
@@ -214,16 +151,7 @@ class Ret20RankFactor(CrossSectionalFactor):
 class Ret30RankFactor(CrossSectionalFactor):
     """30-day return percentile rank within each trading day."""
 
-    spec = FactorSpec(
-        name="ret_30_rank",
-        category="cross_sectional",
-        warmup_days=50,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="cross-sectional percentile rank of ret_30 mapped to [0, 1]",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("ret_30_rank")
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         result = (
@@ -239,16 +167,7 @@ class Ret30RankFactor(CrossSectionalFactor):
 class Ret60RankFactor(CrossSectionalFactor):
     """60-day return percentile rank within each trading day."""
 
-    spec = FactorSpec(
-        name="ret_60_rank",
-        category="cross_sectional",
-        warmup_days=100,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="cross-sectional percentile rank of ret_60 mapped to [0, 1]",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("ret_60_rank")
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         result = (
@@ -266,16 +185,7 @@ class MomentumReg20RankFactor(CrossSectionalFactor):
 
     lookback_days = 20
 
-    spec = FactorSpec(
-        name="momentum_reg_20_rank",
-        category="cross_sectional",
-        warmup_days=30,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="cross-sectional percentile rank of momentum_reg_20 mapped to [0, 1]",
-        supported_asset_types=("stock_CN", "etf_CN", "etf_US"),
-    )
+    spec = get_factor_spec("momentum_reg_20_rank")
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         ordered = df.sort(["symbol", "time"])

@@ -123,7 +123,11 @@ def main(
     max_lag = max(lags)
 
     try:
-        factors = resolve_factors(factor_names, asset_type=asset_type)
+        factors = resolve_factors(
+            factor_names,
+            asset_type=asset_type,
+            production_only=factor_names is None,
+        )
     except ValueError as exc:
         logger.error(str(exc))
         sys.exit(1)

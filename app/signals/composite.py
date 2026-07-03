@@ -42,6 +42,13 @@ def _build_contributors(row: dict[str, Any], profile: SignalProfile) -> list[str
         elif macd_score <= -0.5:
             contributors.append("macd_momentum_weak")
 
+    if "momentum_reg_20" in profile.factor_names:
+        momentum_score = float(row.get("momentum_reg_20_score") or 0.0)
+        if momentum_score >= 0.5:
+            contributors.append("regression_momentum_strong")
+        elif momentum_score <= -0.5:
+            contributors.append("regression_momentum_weak")
+
     if not contributors:
         contributors.append("mixed_signal")
 

@@ -7,6 +7,8 @@ import pytest
 from app.data_loader.base import LoaderCapabilities
 from app.services.asset_universe import (
     AssetTypeConfig,
+    ensure_etl_universe_symbol,
+    etl_universe_contains_symbol,
     get_asset_type_config,
     get_etl_symbol_name_map,
     get_universe_config,
@@ -311,6 +313,41 @@ def test_write_etl_universe_rows_preserves_asset_type_column(tmp_path: Path) -> 
     assert broker_row["asset_type"] == "etf_CN"
     assert broker_row["tag"] == "broker"
     assert (etl_universes_dir / "etf_CN.csv").read_text(encoding="utf-8").splitlines()[0] == "asset_type,symbol,name,is_active,tag"
+
+
+def test_etl_universe_contains_and_ensure_symbol(tmp_path: Path) -> None:
+    asset_types, universes, universes_dir, etl_universes_dir = _config_paths(tmp_path)
+    _write(
+        asset_types,
+        "asset_type,display_name,data_source,calendar_key,loader_key,etl_universe,etl_fetch_mode,strict_date_coverage,fill_missing_as_suspended,enabled\nstock_CN,A股股票,tushare,CN,tushare,stock_CN,by_date,true,true,true\n",
+    )
+    _write(
+        etl_universes_dir / "stock_CN.csv",
+        "asset_type,symbol,name,is_active\nstock_CN,600519.SH,贵州茅台,true\n",
+    )
+
+    assert etl_universe_contains_symbol("stock_CN", "600519.SH", path=asset_types, universes_dir=etl_universes_dir) is True
+    assert etl_universe_contains_symbol("stock_CN", "000001.SZ", path=asset_types, universes_dir=etl_universes_dir) is False
+
+    rows, added = ensure_etl_universe_symbol(
+        "stock_CN",
+        "000001.SZ",
+        name="平安银行",
+        path=asset_types,
+        universes_dir=etl_universes_dir,
+    )
+    assert added is True
+    assert any(row["symbol"] == "000001.SZ" and row["name"] == "平安银行" for row in rows)
+
+    rows, added = ensure_etl_universe_symbol(
+        "stock_CN",
+        "000001.SZ",
+        name="平安银行",
+        path=asset_types,
+        universes_dir=etl_universes_dir,
+    )
+    assert added is False
+    assert len([row for row in rows if row["symbol"] == "000001.SZ"]) == 1
 
 
 def test_default_asset_type_resolution_uses_enabled_registry(monkeypatch: pytest.MonkeyPatch) -> None:

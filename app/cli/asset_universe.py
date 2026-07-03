@@ -163,7 +163,7 @@ def update_symbol(universe: str, asset_type: str, symbol: str, name: str | None 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Manage universes by universe name")
-    parser.add_argument("--universe", default="stock_subjective_CN", help="universe 名称，默认 stock_subjective_CN")
+    parser.add_argument("--universe", required=True, help="universe 名称")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("list", help="List universe rows")

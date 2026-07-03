@@ -146,7 +146,11 @@ def _run_for_asset_type(
     today = datetime.now(timezone.utc)
     end_str = _yyyymmdd(today)
     start_str = _yyyymmdd(today - timedelta(days=lookback_days))
-    factors = resolve_factors(factor_names, asset_type=asset_type)
+    factors = resolve_factors(
+        factor_names,
+        asset_type=asset_type,
+        production_only=factor_names is None,
+    )
     factor_name_list = [factor.name for factor in factors]
     factor_min_cross_section = {factor.name: factor.ic_min_cross_section for factor in factors}
     max_lag = max(lags)
@@ -483,7 +487,11 @@ def main(
     try:
         resolved_asset_types = _resolve_asset_types(asset_types)
         for asset_type in resolved_asset_types:
-            resolve_factors(factor_names, asset_type=asset_type)
+            resolve_factors(
+                factor_names,
+                asset_type=asset_type,
+                production_only=factor_names is None,
+            )
     except ValueError as exc:
         logger.error(str(exc))
         sys.exit(1)

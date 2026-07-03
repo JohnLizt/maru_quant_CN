@@ -14,7 +14,7 @@ import polars as pl
 import ta
 
 from app.factors.base import TimeSeriesFactor
-from app.factors.specs import FactorSpec
+from app.factors.specs import get_factor_spec
 
 
 def _clean(result: pl.DataFrame) -> pl.DataFrame:
@@ -25,16 +25,7 @@ def _clean(result: pl.DataFrame) -> pl.DataFrame:
 class PriceToMA20Factor(TimeSeriesFactor):
     """价格偏离 20 日均线比率：(close - MA20) / MA20"""
 
-    spec = FactorSpec(
-        name="price_to_ma20",
-        category="time_series",
-        warmup_days=30,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="(close - MA20) / MA20",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("price_to_ma20")
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         close = df["close"].to_pandas()
@@ -53,16 +44,7 @@ class PriceToMA20Factor(TimeSeriesFactor):
 class MACrossGactor(TimeSeriesFactor):
     """均线斜率：(MA20 - MA60) / MA60，正值为多头排列（金叉），负值为空头排列（死叉）"""
 
-    spec = FactorSpec(
-        name="ma_cross",
-        category="time_series",
-        warmup_days=100,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="(MA20 - MA60) / MA60",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("ma_cross")
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         close = df["close"].to_pandas()
@@ -83,16 +65,7 @@ class MACrossGactor(TimeSeriesFactor):
 class RSIFactor(TimeSeriesFactor):
     """14 日 RSI（0~100），已归一化，跨股票可比"""
 
-    spec = FactorSpec(
-        name="rsi14",
-        category="time_series",
-        warmup_days=20,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="RSI(14)",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("rsi14")
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         close = df["close"].to_pandas()
@@ -106,16 +79,7 @@ class RSIFactor(TimeSeriesFactor):
 class MACDNormFactor(TimeSeriesFactor):
     """MACD 差离值 / 收盘价，消除价格量纲后跨股票可比"""
 
-    spec = FactorSpec(
-        name="macd_norm",
-        category="time_series",
-        warmup_days=50,
-        suspended_policy="allow",
-        required_fields=("close",),
-        ic_min_cross_section=20,
-        description="MACD diff / close",
-        supported_asset_types=("stock_CN", "etf_CN"),
-    )
+    spec = get_factor_spec("macd_norm")
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         close = df["close"].to_pandas()
@@ -141,16 +105,7 @@ class LimitUpFactor(TimeSeriesFactor):
     - 新股上市首日 prev_close 为 null，对应行输出 null 并在写入时被过滤
     """
 
-    spec = FactorSpec(
-        name="limit_up",
-        category="time_series",
-        warmup_days=2,
-        suspended_policy="mask",
-        required_fields=("high", "close"),
-        ic_min_cross_section=None,
-        description="high >= prev_close * 1.1",
-        supported_asset_types=("stock_CN",),
-    )
+    spec = get_factor_spec("limit_up")
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
         result = (

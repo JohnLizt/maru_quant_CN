@@ -453,6 +453,24 @@ def get_etl_symbol_tag_map(
     }
 
 
+def etl_universe_contains_symbol(
+    asset_type: str,
+    symbol: str,
+    *,
+    universes_dir: Path = ETL_UNIVERSES_DIR,
+    path: Path = ASSET_TYPES_CSV,
+) -> bool:
+    normalized_asset_type = normalize_asset_type(asset_type)
+    normalized_symbol = normalize_symbol_for_asset_type(normalized_asset_type, symbol)
+    return normalized_symbol in set(
+        resolve_etl_symbols(
+            normalized_asset_type,
+            universes_dir=universes_dir,
+            path=path,
+        )
+    )
+
+
 def write_universe_rows(
     universe: str,
     rows: list[dict[str, str | bool]],
@@ -567,6 +585,46 @@ def write_etl_universe_rows(
         asset_type,
         universes_dir=universes_dir,
         path=path,
+    )
+
+
+def ensure_etl_universe_symbol(
+    asset_type: str,
+    symbol: str,
+    *,
+    name: str | None = None,
+    universes_dir: Path = ETL_UNIVERSES_DIR,
+    path: Path = ASSET_TYPES_CSV,
+) -> tuple[list[dict[str, str]], bool]:
+    normalized_asset_type = normalize_asset_type(asset_type)
+    normalized_symbol = normalize_symbol_for_asset_type(normalized_asset_type, symbol)
+    rows = load_etl_universe(
+        normalized_asset_type,
+        universes_dir=universes_dir,
+        path=path,
+    )
+    existing_row = next((row for row in rows if row["symbol"] == normalized_symbol), None)
+    if existing_row is not None:
+        return rows, False
+
+    updated_rows = [
+        *rows,
+        {
+            "asset_type": normalized_asset_type,
+            "symbol": normalized_symbol,
+            "name": _normalize_name(str(name or "")),
+            "is_active": "true",
+            "tag": "",
+        },
+    ]
+    return (
+        write_etl_universe_rows(
+            normalized_asset_type,
+            updated_rows,
+            universes_dir=universes_dir,
+            path=path,
+        ),
+        True,
     )
 
 

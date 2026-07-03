@@ -8,8 +8,7 @@ import polars as pl
 from sqlalchemy import text
 
 from app.services.asset_universe import (
-    get_universe_symbol_name_map,
-    get_universe_symbol_tag_map,
+    load_etl_universe,
     normalize_symbol,
     resolve_universe_rows,
 )
@@ -190,17 +189,15 @@ def _pivot_factors(
     return wide.filter(pl.all_horizontal(validity_checks))
 
 
-def _attach_symbol_names(df: pl.DataFrame, universe_rows: list[dict[str, str]], universe: str) -> pl.DataFrame:
-    symbol_name_map = get_universe_symbol_name_map(universe)
-    tag_map = get_universe_symbol_tag_map(universe)
+def _attach_symbol_names(df: pl.DataFrame, universe_rows: list[dict[str, str]]) -> pl.DataFrame:
     mapping_rows = [
         {
-            "asset_type": asset_type,
-            "symbol": symbol,
-            "symbol_name": symbol_name_map.get((asset_type, symbol), ""),
-            "tag": tag_map.get((asset_type, symbol), ""),
+            "asset_type": row["asset_type"],
+            "symbol": row["symbol"],
+            "symbol_name": str(row.get("name", "")).strip(),
+            "tag": str(row.get("tag", "")).strip(),
         }
-        for asset_type, symbol in {(row["asset_type"], row["symbol"]) for row in universe_rows}
+        for row in universe_rows
     ]
     if not mapping_rows:
         return df.with_columns([pl.lit("").alias("symbol_name"), pl.lit("").alias("tag")])
@@ -239,6 +236,25 @@ def _smooth_factor_scores(df: pl.DataFrame, profile: SignalProfile) -> pl.DataFr
     return smoothed.sort(["time", "symbol"])
 
 
+def _finalize_signal_frame(
+    df: pl.DataFrame,
+    *,
+    profile: SignalProfile,
+) -> pl.DataFrame:
+    if profile.signal_mode == "cross_sectional":
+        ranked = df.with_columns(
+            pl.col("composite_score")
+            .rank(method="ordinal", descending=True)
+            .over("time")
+            .cast(pl.UInt32)
+            .alias("rank")
+        )
+        return ranked.sort(["time", "composite_score", "symbol"], descending=[False, True, False])
+
+    scored = df.with_columns(pl.lit(None).cast(pl.UInt32).alias("rank"))
+    return scored.sort(["time", "composite_score", "symbol"], descending=[False, True, False])
+
+
 def build_signal_snapshot(
     symbols: list[str] | None = None,
     start_date: str | date | datetime | None = None,
@@ -254,11 +270,17 @@ def build_signal_snapshot(
     profile = get_signal_profile(profile_name)
     normalized_symbols = _normalize_symbols(symbols)
     start, end = _normalize_date_range(start_date, end_date)
-    target_universe = str(universe or asset_type or "stock_CN").strip()
-    if not target_universe:
-        raise ValueError("universe 不能为空")
-    default_asset_type = asset_type if asset_type else None
-    universe_rows = resolve_universe_rows(target_universe, default_asset_type=default_asset_type)
+    if universe:
+        target_universe = str(universe).strip()
+        if not target_universe:
+            raise ValueError("universe 不能为空")
+        default_asset_type = asset_type if asset_type else None
+        universe_rows = resolve_universe_rows(target_universe, default_asset_type=default_asset_type)
+    elif asset_type:
+        target_universe = asset_type
+        universe_rows = load_etl_universe(asset_type)
+    else:
+        raise ValueError("asset_type 与 universe 不能同时为空")
     universe_asset_types = {row["asset_type"] for row in universe_rows}
     _validate_profile_asset_types(profile, universe_asset_types)
     query_factor_names = _ordered_factor_names(profile, extra_factor_names)
@@ -278,9 +300,9 @@ def build_signal_snapshot(
         .pipe(apply_signal_profile, profile=profile)
         .pipe(_smooth_factor_scores, profile=profile)
         .pipe(apply_composite_score, profile=profile)
-        .pipe(_attach_symbol_names, universe_rows=universe_rows, universe=target_universe)
+        .pipe(_attach_symbol_names, universe_rows=universe_rows)
         .with_columns(pl.lit(profile.signal_mode).alias("signal_mode"))
-        .with_columns(pl.col("composite_score").rank(method="ordinal", descending=True).over("time").cast(pl.UInt32).alias("rank"))
+        .pipe(_finalize_signal_frame, profile=profile)
         .select([
             "time",
             "asset_type",
@@ -295,7 +317,6 @@ def build_signal_snapshot(
             "contributors",
             "rank",
         ])
-        .sort(["time", "composite_score", "symbol"], descending=[False, True, False])
     )
 
     if normalized_symbols:

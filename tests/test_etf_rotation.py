@@ -8,7 +8,8 @@ import pytest
 
 from app.backtest.risk_overlay import RiskOverlayConfig
 from app.backtest.runner import BacktestResult, StrategyBacktestBundle, run_backtest, run_strategy_backtest
-from app.factors.registry import resolve_factors
+from app.factors.registry import production_factors, resolve_factors
+from app.factors.specs import get_factor_spec
 from app.signals.composite import apply_composite_score
 from app.signals.profiles import get_signal_profile
 from app.services.strategy_service import StrategySnapshotBundle, build_strategy_snapshot, run_strategy_snapshot
@@ -51,6 +52,21 @@ def test_resolve_factors_filters_by_asset_type() -> None:
     assert {"std_score", "cv"}.issubset(etf_factors)
 
 
+def test_factor_specs_load_from_catalog_table() -> None:
+    spec = get_factor_spec("momentum_reg_20")
+
+    assert spec.name == "momentum_reg_20"
+    assert spec.supported_asset_types == ("stock_CN", "etf_CN", "etf_US")
+    assert spec.production_enabled is True
+
+
+def test_resolve_factors_can_filter_production_flag() -> None:
+    all_stock = resolve_factors(asset_type="stock_CN")
+    prod_stock = resolve_factors(asset_type="stock_CN", production_only=True)
+
+    assert [factor.name for factor in prod_stock] == [factor.name for factor in production_factors(all_stock)]
+
+
 def test_resolve_factors_rejects_unsupported_factor_for_etf() -> None:
     with pytest.raises(ValueError, match="不支持因子"):
         resolve_factors(["limit_up"], asset_type="etf_CN")
@@ -59,10 +75,16 @@ def test_resolve_factors_rejects_unsupported_factor_for_etf() -> None:
 def test_trend_v1_profile_weights_and_factor_set() -> None:
     profile = get_signal_profile("trend_v1")
 
-    assert profile.factor_names == ["ma_cross", "price_to_ma20", "rsi14"]
-    assert profile.signal_mode == "cross_sectional"
+    assert profile.factor_names == ["momentum_reg_20"]
+    assert profile.signal_mode == "time_series"
+    assert profile.normalization_scope == "by_symbol"
     assert profile.supported_asset_types == ("stock_CN",)
-    assert [rule.weight for rule in profile.factor_rules] == [0.4, 0.3, 0.3]
+    rule = profile.factor_rules[0]
+    assert rule.weight == 1.0
+    assert rule.method == "piecewise"
+    assert rule.left_score == -1.0
+    assert rule.right_score == 1.0
+    assert len(rule.segments) == 5
 
 
 def test_trend_v1_composite_uses_stock_factor_scores() -> None:
@@ -70,24 +92,16 @@ def test_trend_v1_composite_uses_stock_factor_scores() -> None:
     df = pl.DataFrame(
         [
             {
-                "ma_cross": 0.10,
-                "price_to_ma20": 0.05,
-                "rsi14": 65.0,
-                "ma_cross_score": 0.7,
-                "price_to_ma20_score": 0.5,
-                "rsi14_score": 0.8,
+                "momentum_reg_20": 0.18,
+                "momentum_reg_20_score": 0.7,
             }
         ]
     )
 
     result = apply_composite_score(df, profile)
 
-    assert result.get_column("composite_score").to_list()[0] == pytest.approx(0.67, abs=1e-6)
-    assert result.get_column("contributors").to_list()[0] == [
-        "trend_structure_strong",
-        "price_above_ma20",
-        "rsi_in_healthy_trend_zone",
-    ]
+    assert result.get_column("composite_score").to_list()[0] == pytest.approx(0.7, abs=1e-6)
+    assert result.get_column("contributors").to_list()[0] == ["regression_momentum_strong"]
     assert result.get_column("label").to_list()[0] == "strong"
 
 

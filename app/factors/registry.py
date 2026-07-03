@@ -49,8 +49,14 @@ DEFAULT_FACTORS: list[BaseFactor] = [
 FACTOR_REGISTRY: dict[str, BaseFactor] = {factor.name: factor for factor in DEFAULT_FACTORS}
 
 
-def factors_for_asset_type(asset_type: str) -> list[BaseFactor]:
-    return [factor for factor in DEFAULT_FACTORS if factor.supports_asset_type(asset_type)]
+def production_factors(factors: list[BaseFactor] | None = None) -> list[BaseFactor]:
+    selected = factors if factors is not None else DEFAULT_FACTORS
+    return [factor for factor in selected if factor.production_enabled]
+
+
+def factors_for_asset_type(asset_type: str, *, production_only: bool = False) -> list[BaseFactor]:
+    factors = [factor for factor in DEFAULT_FACTORS if factor.supports_asset_type(asset_type)]
+    return production_factors(factors) if production_only else factors
 
 
 def time_series_factors(factors: list[BaseFactor]) -> list[TimeSeriesFactor]:
@@ -61,9 +67,17 @@ def cross_sectional_factors(factors: list[BaseFactor]) -> list[CrossSectionalFac
     return [factor for factor in factors if isinstance(factor, CrossSectionalFactor)]
 
 
-def resolve_factors(factor_names: list[str] | None = None, *, asset_type: str | None = None) -> list[BaseFactor]:
+def resolve_factors(
+    factor_names: list[str] | None = None,
+    *,
+    asset_type: str | None = None,
+    production_only: bool = False,
+) -> list[BaseFactor]:
     """解析用户指定的因子列表；未指定时返回默认全部因子。"""
-    available_factors = factors_for_asset_type(asset_type) if asset_type else DEFAULT_FACTORS
+    if asset_type:
+        available_factors = factors_for_asset_type(asset_type, production_only=production_only)
+    else:
+        available_factors = production_factors(DEFAULT_FACTORS) if production_only else DEFAULT_FACTORS
     available_names = {factor.name for factor in available_factors}
 
     if not factor_names:
