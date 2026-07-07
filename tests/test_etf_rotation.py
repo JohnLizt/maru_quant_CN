@@ -45,11 +45,13 @@ def _market_bar(
 def test_resolve_factors_filters_by_asset_type() -> None:
     stock_factors = [factor.name for factor in resolve_factors(asset_type="stock_CN")]
     etf_factors = [factor.name for factor in resolve_factors(asset_type="etf_CN")]
+    etf_us_factors = [factor.name for factor in resolve_factors(asset_type="etf_US")]
 
     assert "limit_up" in stock_factors
     assert "limit_up" not in etf_factors
     assert {"price_to_ma20", "ma_cross", "rsi14", "macd_norm"}.issubset(etf_factors)
     assert {"std_score", "cv"}.issubset(etf_factors)
+    assert {"std_score", "cv"}.issubset(etf_us_factors)
 
 
 def test_factor_specs_load_from_catalog_table() -> None:
