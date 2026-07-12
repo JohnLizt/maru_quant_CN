@@ -359,6 +359,7 @@ def run_backtest(
     initial_capital: float = 40000.0,
     commission_min: float = 0.01,
     cash_interest_rate: float = 0.01,
+    market_data_override: pl.DataFrame | None = None,
 ) -> BacktestResult:
     """Run a cash-account backtest from StrategyDecisionTable rows."""
 
@@ -427,7 +428,7 @@ def run_backtest(
         str(current)
         for current in filtered.get_column("asset_type").drop_nulls().unique().to_list()
     })
-    market_data = _load_market_data(decision_asset_types, start_date, end_date)
+    market_data = market_data_override if market_data_override is not None else _load_market_data(decision_asset_types, start_date, end_date)
     logger.info("市场行情记录数: {}", market_data.height)
     trading_dates = sorted({current for current in market_data.get_column("time").to_list() if current is not None})
     effective_decisions = _build_effective_decisions(filtered, trading_dates, execution_lag, start_date, end_date)
