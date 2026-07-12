@@ -13,7 +13,7 @@ from app.factors.specs import get_factor_spec
 from app.signals.composite import apply_composite_score
 from app.signals.profiles import get_signal_profile
 from app.services.strategy_service import StrategySnapshotBundle, build_strategy_snapshot, run_strategy_snapshot
-from app.strategy.etf_rotation import ETFUniverseRotationStrategy
+from app.strategy.etf_rotation import ETFRotationCNStrategy, ETFRotationUSStrategy, ETFUniverseRotationStrategy, resolve_etf_rotation_strategy
 
 
 def _market_bar(
@@ -194,6 +194,20 @@ def test_etf_rotation_strategy_limits_same_tag_exposure() -> None:
     assert result.get_column("symbol").to_list() == ["588200.SH", "159819.SZ", "512000.SH"]
     metadata = json.loads(result.get_column("metadata").to_list()[0])
     assert metadata["rank"] == 1
+
+
+def test_resolve_etf_rotation_strategy_returns_region_specific_defaults() -> None:
+    cn_strategy = resolve_etf_rotation_strategy("etf_rotation_CN")
+    us_strategy = resolve_etf_rotation_strategy("etf_rotation_US")
+    mixed_strategy = resolve_etf_rotation_strategy("etf_mixed")
+
+    assert isinstance(cn_strategy, ETFRotationCNStrategy)
+    assert isinstance(us_strategy, ETFRotationUSStrategy)
+    assert isinstance(mixed_strategy, ETFUniverseRotationStrategy)
+    assert cn_strategy.default_risk_config().std_threshold == pytest.approx(0.03)
+    assert cn_strategy.default_risk_config().cv_threshold == pytest.approx(0.5)
+    assert us_strategy.default_risk_config().std_threshold == pytest.approx(0.02)
+    assert us_strategy.default_risk_config().cv_threshold == pytest.approx(0.7)
 
 
 def test_strategy_service_builds_snapshot_and_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -855,6 +869,67 @@ def test_backtest_etf_rotation_cli_passes_risk_config(monkeypatch: pytest.Monkey
     assert risk_config.cv_threshold == pytest.approx(0.6)
     assert risk_config.stop_loss_rate == pytest.approx(0.12)
     assert risk_config.half_weight == pytest.approx(0.4)
+
+
+def test_backtest_etf_rotation_cli_uses_strategy_default_risk_config_for_us(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    from app.cli import backtest_etf_rotation
+
+    ts = datetime(2026, 5, 30, tzinfo=timezone.utc)
+    signal_snapshot = pl.DataFrame([{"time": ts, "asset_type": "etf_US", "symbol": "XLV"}])
+    decisions = pl.DataFrame([{"time": ts, "asset_type": "etf_US", "symbol": "XLV"}])
+    returns_df = pl.DataFrame([{"time": date(2026, 5, 30), "nav": 40000.0, "cash": 0.0, "cash_ratio": 0.0, "gross_return": 0.01, "cost": 0.0, "turnover": 0.0, "net_return": 0.01}])
+    holdings_df = pl.DataFrame([{"time": date(2026, 5, 30), "asset_type": "etf_US", "symbol": "XLV", "shares": 1.0, "close": 10.0, "market_value": 10.0, "weight": 1.0, "buy_price": 10.0, "buy_date": date(2026, 5, 30), "risk_half_triggered": False, "strategy": "etf_rotation_v1", "score": 0.8, "rank": 1, "tag": "alpha", "metadata": "{}"}])
+    trades_df = pl.DataFrame([{"time": date(2026, 5, 30), "asset_type": "etf_US", "symbol": "XLV", "action": "调仓买入", "side": "buy", "price": 10.0, "shares": 1.0, "notional": 10.0, "fee": 0.0, "cash_before": 40000.0, "cash_after": 39990.0, "nav_after_trade": 40000.0, "signal_date": date(2026, 5, 30), "risk_reason": ""}])
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_strategy_backtest(strategy, **kwargs):
+        captured["strategy"] = strategy
+        captured["risk_config"] = kwargs["risk_config"]
+        return StrategyBacktestBundle(
+            signal_snapshot=signal_snapshot,
+            decisions_df=decisions,
+            backtest_result=BacktestResult(
+                holdings_df=holdings_df,
+                trades_df=trades_df,
+                returns_df=returns_df,
+                equity_curve_df=pl.DataFrame([{"time": date(2026, 5, 30), "gross_return": 0.01, "turnover": 0.0, "cost": 0.0, "net_return": 0.01, "equity_curve": 1.01}]),
+                metrics={"total_return": 0.01},
+            ),
+        )
+
+    monkeypatch.setattr(backtest_etf_rotation, "run_strategy_backtest", _fake_run_strategy_backtest)
+
+    exit_code = backtest_etf_rotation.main(
+        "2026-05-30",
+        "2026-05-30",
+        "trend_etf_momentum_reg20",
+        "etf_rotation_US",
+        4,
+        1,
+        2,
+        1,
+        5.0,
+        5.0,
+        "json",
+        "INFO",
+        str(tmp_path),
+        False,
+        False,
+        True,
+    )
+
+    assert exit_code == 0
+    assert isinstance(captured["strategy"], ETFRotationUSStrategy)
+    risk_config = captured["risk_config"]
+    assert isinstance(risk_config, RiskOverlayConfig)
+    assert risk_config.std_threshold == pytest.approx(0.02)
+    assert risk_config.cv_threshold == pytest.approx(0.7)
+    assert risk_config.stop_loss_rate == pytest.approx(0.10)
+    assert risk_config.half_weight == pytest.approx(0.5)
 
 
 def test_query_etf_rotation_requests_extra_display_factors(

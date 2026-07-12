@@ -14,7 +14,7 @@ for candidate in ["/app", str(REPO_ROOT)]:
         sys.path.insert(0, candidate)
 
 from app.services.strategy_service import build_strategy_snapshot
-from app.strategy.etf_rotation import ETFUniverseRotationStrategy
+from app.strategy.etf_rotation import ETFRotationCNStrategy, resolve_etf_rotation_strategy
 
 
 def _to_result_rows(signal_snapshot, top_n: int) -> list[dict]:
@@ -66,7 +66,12 @@ def _to_strategy_rows(decisions) -> list[dict]:
 
 
 def main(date: str | None, top_n: int, profile_name: str, universe: str) -> int:
-    strategy = ETFUniverseRotationStrategy(top_n=top_n, profile_name=profile_name, max_per_tag=1)
+    strategy = resolve_etf_rotation_strategy(
+        universe,
+        top_n=top_n,
+        profile_name=profile_name,
+        max_per_tag=1,
+    )
     as_of_date = datetime.strptime(date, "%Y-%m-%d").date() if date else None
     bundle = build_strategy_snapshot(
         strategy,
@@ -106,9 +111,13 @@ if __name__ == "__main__":
     parser.add_argument("--top", type=int, default=4, help="返回前 N 名展示结果，默认 4")
     parser.add_argument(
         "--profile",
-        default="trend_etf_momentum_reg20",
+        default=ETFRotationCNStrategy.default_profile_name,
         help="ETF signal profile，默认 trend_etf_momentum_reg20",
     )
-    parser.add_argument("--universe", default="etf_rotation_CN", help="策略池，默认 etf_rotation_CN")
+    parser.add_argument(
+        "--universe",
+        default=ETFRotationCNStrategy.default_universe,
+        help="策略池，默认 etf_rotation_CN",
+    )
     args = parser.parse_args()
     raise SystemExit(main(args.date, args.top, args.profile, args.universe))

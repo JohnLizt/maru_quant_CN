@@ -16,7 +16,7 @@ for candidate in ["/app", str(REPO_ROOT)]:
 from app.backtest.reporting import export_backtest_artifacts
 from app.backtest.risk_overlay import RiskOverlayConfig
 from app.backtest.runner import run_strategy_backtest
-from app.strategy.etf_rotation import ETFUniverseRotationStrategy
+from app.strategy.etf_rotation import ETFRotationCNStrategy, resolve_etf_rotation_strategy
 from app.utils.logging import build_timestamped_prefix, configure_task_logger, ensure_log_directories
 from loguru import logger
 
@@ -54,10 +54,10 @@ def main(
     save_artifacts: bool,
     save_chart: bool,
     risk_control: bool = False,
-    risk_std_threshold: float = 0.03,
-    risk_cv_threshold: float = 0.5,
-    stop_loss_rate: float = 0.10,
-    risk_half_weight: float = 0.5,
+    risk_std_threshold: float | None = None,
+    risk_cv_threshold: float | None = None,
+    stop_loss_rate: float | None = None,
+    risk_half_weight: float | None = None,
     initial_capital: float = 40000.0,
     commission_min: float = 0.01,
     cash_interest_rate: float = 0.01,
@@ -92,21 +92,33 @@ def main(
         cash_interest_rate,
     )
 
-    strategy = ETFUniverseRotationStrategy(
+    strategy = resolve_etf_rotation_strategy(
+        universe,
         top_n=top_n,
         profile_name=profile_name,
         max_per_tag=max_per_tag,
     )
-    risk_config = (
-        RiskOverlayConfig(
-            std_threshold=risk_std_threshold,
-            cv_threshold=risk_cv_threshold,
-            stop_loss_rate=stop_loss_rate,
-            half_weight=risk_half_weight,
+    if risk_control:
+        strategy_risk_config = strategy.default_risk_config()
+        risk_config = RiskOverlayConfig(
+            std_threshold=risk_std_threshold if risk_std_threshold is not None else strategy_risk_config.std_threshold,
+            cv_threshold=risk_cv_threshold if risk_cv_threshold is not None else strategy_risk_config.cv_threshold,
+            stop_loss_rate=stop_loss_rate if stop_loss_rate is not None else strategy_risk_config.stop_loss_rate,
+            half_weight=risk_half_weight if risk_half_weight is not None else strategy_risk_config.half_weight,
+            std_long_window=strategy_risk_config.std_long_window,
+            std_short_window=strategy_risk_config.std_short_window,
+            cv_window=strategy_risk_config.cv_window,
         )
-        if risk_control
-        else None
-    )
+    else:
+        risk_config = None
+    if risk_config is not None:
+        logger.info(
+            "风控参数 | std_threshold={} | cv_threshold={} | stop_loss_rate={} | half_weight={}",
+            risk_config.std_threshold,
+            risk_config.cv_threshold,
+            risk_config.stop_loss_rate,
+            risk_config.half_weight,
+        )
     bundle = run_strategy_backtest(
         strategy,
         asset_type=None,
@@ -168,10 +180,10 @@ def main(
             "slippage_bps": slippage_bps,
             "log_level": log_level.upper(),
             "risk_control": risk_control,
-            "risk_std_threshold": risk_std_threshold,
-            "risk_cv_threshold": risk_cv_threshold,
-            "stop_loss_rate": stop_loss_rate,
-            "risk_half_weight": risk_half_weight,
+            "risk_std_threshold": risk_config.std_threshold if risk_config is not None else None,
+            "risk_cv_threshold": risk_config.cv_threshold if risk_config is not None else None,
+            "stop_loss_rate": risk_config.stop_loss_rate if risk_config is not None else None,
+            "risk_half_weight": risk_config.half_weight if risk_config is not None else None,
             "initial_capital": initial_capital,
             "commission_min": commission_min,
             "cash_interest_rate": cash_interest_rate,
@@ -241,10 +253,14 @@ if __name__ == "__main__":
     parser.add_argument("--end-date", default=default_end, help="结束日期 YYYY-MM-DD")
     parser.add_argument(
         "--profile",
-        default="trend_etf_momentum_reg20",
+        default=ETFRotationCNStrategy.default_profile_name,
         help="ETF signal profile，默认 trend_etf_momentum_reg20",
     )
-    parser.add_argument("--universe", default="etf_rotation_CN", help="策略池，默认 etf_rotation_CN")
+    parser.add_argument(
+        "--universe",
+        default=ETFRotationCNStrategy.default_universe,
+        help="策略池，默认 etf_rotation_CN",
+    )
     parser.add_argument("--top-n", type=int, default=4, help="持仓数量，默认 4")
     parser.add_argument("--max-per-tag", type=int, default=1, help="同 tag 最大持仓数，默认 1")
     parser.add_argument("--rebalance-weekday", type=int, default=2, help="周调仓日，Python weekday 语义，周一=0，默认周三=2")
@@ -252,10 +268,30 @@ if __name__ == "__main__":
     parser.add_argument("--commission-bps", type=float, default=5.0, help="单边手续费 bps，默认 5")
     parser.add_argument("--slippage-bps", type=float, default=5.0, help="单边滑点 bps，默认 5")
     parser.add_argument("--risk-control", action="store_true", help="启用 ETF 风险过滤/半仓/止损 overlay，默认关闭")
-    parser.add_argument("--risk-std-threshold", type=float, default=0.03, help="风险过滤波动率阈值，默认 0.03")
-    parser.add_argument("--risk-cv-threshold", type=float, default=0.5, help="成交额 CV 阈值，默认 0.5")
-    parser.add_argument("--stop-loss-rate", type=float, default=0.10, help="持仓周期止损阈值，默认 0.10")
-    parser.add_argument("--risk-half-weight", type=float, default=0.5, help="触发风险过滤后的权重乘数，默认 0.5")
+    parser.add_argument(
+        "--risk-std-threshold",
+        type=float,
+        default=None,
+        help="风险过滤波动率阈值，默认使用策略/市场配置",
+    )
+    parser.add_argument(
+        "--risk-cv-threshold",
+        type=float,
+        default=None,
+        help="成交额 CV 阈值，默认使用策略/市场配置",
+    )
+    parser.add_argument(
+        "--stop-loss-rate",
+        type=float,
+        default=None,
+        help="持仓周期止损阈值，默认使用策略/市场配置",
+    )
+    parser.add_argument(
+        "--risk-half-weight",
+        type=float,
+        default=None,
+        help="触发风险过滤后的权重乘数，默认使用策略/市场配置",
+    )
     parser.add_argument("--initial-capital", type=float, default=40000.0, help="初始资金，默认 40000")
     parser.add_argument("--commission-min", type=float, default=0.01, help="单笔最低佣金，默认 0.01")
     parser.add_argument("--cash-interest-rate", type=float, default=0.01, help="现金年化利率，默认 0.01")
