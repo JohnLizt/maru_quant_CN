@@ -20,14 +20,20 @@ def load_factors(
     end: str,
     asset_type: str,
     factor_names: list[str] | None = None,
+    symbols: list[str] | None = None,
 ) -> pl.DataFrame:
     """Load long-format factor rows from factors.daily_factors."""
     where_factor = ""
+    where_symbol = ""
     params: dict[str, object] = {"start": start, "end": end, "asset_type": asset_type}
     if factor_names:
         placeholders = ", ".join(f":f{i}" for i in range(len(factor_names)))
         where_factor = f"AND factor_name IN ({placeholders})"
         params |= {f"f{i}": factor_name for i, factor_name in enumerate(factor_names)}
+    if symbols:
+        placeholders = ", ".join(f":s{i}" for i in range(len(symbols)))
+        where_symbol = f"AND symbol IN ({placeholders})"
+        params |= {f"s{i}": symbol for i, symbol in enumerate(symbols)}
 
     sql = text(
         f"""
@@ -37,6 +43,7 @@ def load_factors(
           AND time <= :end
           AND asset_type = :asset_type
           {where_factor}
+          {where_symbol}
         ORDER BY time, symbol, factor_name
         """
     )
@@ -49,24 +56,35 @@ def load_factors(
     )
 
 
-def load_returns(engine, start: str, end: str, asset_type: str, max_lag: int) -> pl.DataFrame:
+def load_returns(
+    engine,
+    start: str,
+    end: str,
+    asset_type: str,
+    max_lag: int,
+    symbols: list[str] | None = None,
+) -> pl.DataFrame:
     """Load market daily returns with enough future buffer for the largest lag."""
     end_ext = (datetime.strptime(end, "%Y-%m-%d") + timedelta(days=max_lag * 2 + 5)).strftime("%Y-%m-%d")
+    where_symbol = ""
+    params: dict[str, object] = {"start": start, "end": end_ext, "asset_type": asset_type}
+    if symbols:
+        placeholders = ", ".join(f":s{i}" for i in range(len(symbols)))
+        where_symbol = f"AND symbol IN ({placeholders})"
+        params |= {f"s{i}": symbol for i, symbol in enumerate(symbols)}
     sql = text(
-        """
+        f"""
         SELECT time, symbol, pct_change
         FROM market.daily
         WHERE time >= :start
           AND time <= :end
           AND asset_type = :asset_type
+          {where_symbol}
         ORDER BY symbol, time
         """
     )
     with engine.connect() as conn:
-        rows = conn.execute(
-            sql,
-            {"start": start, "end": end_ext, "asset_type": asset_type},
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
 
     df = pl.DataFrame(rows, schema=["time", "symbol", "pct_change"], orient="row")
     if df.is_empty():

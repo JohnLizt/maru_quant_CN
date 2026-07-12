@@ -55,7 +55,7 @@ from app.analytics import (
 )
 from app.factors.pipeline.loader import get_market_dates
 from app.factors.registry import FACTOR_REGISTRY, resolve_factors
-from app.services.asset_universe import list_asset_types
+from app.services.asset_universe import list_asset_types, resolve_etl_symbols
 from app.utils.db import get_engine
 
 
@@ -154,6 +154,7 @@ def _run_for_asset_type(
     factor_name_list = [factor.name for factor in factors]
     factor_min_cross_section = {factor.name: factor.ic_min_cross_section for factor in factors}
     max_lag = max(lags)
+    universe_symbols = resolve_etl_symbols(asset_type)
 
     market_dates = get_market_dates(engine, start_str, end_str, asset_type)
     if len(market_dates) <= max_lag:
@@ -238,6 +239,7 @@ def _run_for_asset_type(
         lags,
         " | FORCE" if force_update else "",
     )
+    logger.info("[{}] IC universe symbols: {}", asset_type, len(universe_symbols))
 
     if not missing_ic and not missing_quantile and not missing_topk:
         _update_status_group(
@@ -265,8 +267,22 @@ def _run_for_asset_type(
     load_dates = sorted(set(missing_ic) | set(missing_quantile) | set(missing_topk))
     factor_start = _iso(load_dates[0])
     factor_end = _iso(target_dates[-1])
-    df_factors = load_factors(engine, factor_start, factor_end, asset_type, factor_name_list)
-    df_ret = load_returns(engine, factor_start, factor_end, asset_type, max_lag)
+    df_factors = load_factors(
+        engine,
+        factor_start,
+        factor_end,
+        asset_type,
+        factor_name_list,
+        symbols=universe_symbols,
+    )
+    df_ret = load_returns(
+        engine,
+        factor_start,
+        factor_end,
+        asset_type,
+        max_lag,
+        symbols=universe_symbols,
+    )
     if df_factors.is_empty() or df_ret.is_empty():
         error = "因子有效性输入数据为空，请先确认 daily_factors 与 market.daily 完整"
         _update_status_group(

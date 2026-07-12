@@ -86,11 +86,9 @@ TREND_ETF_MOMENTUM_REG20_PROFILE = SignalProfile(
     supported_asset_types=("*",),
     factor_rules=(
         FactorScoreRule(
-            factor_name="momentum_reg_20_rank",
-            method="linear_clip",
+            factor_name="momentum_reg_20",
+            method="rank_to_unit",
             weight=1.0,
-            clip_lower=0.0,
-            clip_upper=1.0,
         ),
     ),
     strong_threshold=0.5,

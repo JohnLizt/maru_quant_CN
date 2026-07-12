@@ -110,14 +110,12 @@ def test_trend_v1_composite_uses_stock_factor_scores() -> None:
 def test_trend_etf_momentum_reg20_profile_weights_and_factor_set() -> None:
     profile = get_signal_profile("trend_etf_momentum_reg20")
 
-    assert profile.factor_names == ["momentum_reg_20_rank"]
+    assert profile.factor_names == ["momentum_reg_20"]
     assert profile.signal_mode == "cross_sectional"
     assert profile.supported_asset_types == ("*",)
     rule = profile.factor_rules[0]
-    assert rule.method == "linear_clip"
+    assert rule.method == "rank_to_unit"
     assert rule.weight == 1.0
-    assert rule.clip_lower == 0.0
-    assert rule.clip_upper == 1.0
 
 
 def test_trend_etf_momentum_reg20_composite_uses_factor_score() -> None:
@@ -125,8 +123,8 @@ def test_trend_etf_momentum_reg20_composite_uses_factor_score() -> None:
     df = pl.DataFrame(
         [
             {
-                "momentum_reg_20_rank": 0.95,
-                "momentum_reg_20_rank_score": 0.9,
+                "momentum_reg_20": 0.95,
+                "momentum_reg_20_score": 0.9,
             }
         ]
     )
@@ -134,7 +132,7 @@ def test_trend_etf_momentum_reg20_composite_uses_factor_score() -> None:
     result = apply_composite_score(df, profile)
 
     assert result.get_column("composite_score").to_list()[0] == pytest.approx(0.9)
-    assert result.get_column("contributors").to_list()[0] == ["mixed_signal"]
+    assert result.get_column("contributors").to_list()[0] == ["regression_momentum_strong"]
     assert result.get_column("label").to_list()[0] == "strong"
 
 
@@ -202,8 +200,8 @@ def test_strategy_service_builds_snapshot_and_decisions(monkeypatch: pytest.Monk
     ts = datetime(2026, 5, 30, tzinfo=timezone.utc)
     rankings = pl.DataFrame(
         [
-            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "518880.SH", "symbol_name": "黄金ETF华安", "tag": "gold", "momentum_reg_20_rank": 0.80, "momentum_reg_20_rank_score": 0.8, "composite_score": 0.8, "label": "strong", "contributors": ["mixed_signal"], "rank": 1},
-            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "512000.SH", "symbol_name": "券商ETF华宝", "tag": "broker", "momentum_reg_20_rank": 0.50, "momentum_reg_20_rank_score": 0.5, "composite_score": 0.5, "label": "positive", "contributors": ["mixed_signal"], "rank": 2},
+            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "518880.SH", "symbol_name": "黄金ETF华安", "tag": "gold", "momentum_reg_20": 0.80, "momentum_reg_20_score": 0.8, "composite_score": 0.8, "label": "strong", "contributors": ["mixed_signal"], "rank": 1},
+            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "512000.SH", "symbol_name": "券商ETF华宝", "tag": "broker", "momentum_reg_20": 0.50, "momentum_reg_20_score": 0.5, "composite_score": 0.5, "label": "positive", "contributors": ["mixed_signal"], "rank": 2},
         ]
     )
 
@@ -604,8 +602,8 @@ def test_run_strategy_backtest_builds_snapshot_decisions_and_result(monkeypatch:
     ts = datetime(2026, 5, 27, tzinfo=timezone.utc)
     snapshot = pl.DataFrame(
         [
-            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "AAA", "symbol_name": "AAA", "tag": "alpha", "momentum_reg_20_rank": 0.8, "momentum_reg_20_rank_score": 0.8, "composite_score": 0.8, "label": "strong", "contributors": ["mixed_signal"], "rank": 1},
-            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "BBB", "symbol_name": "BBB", "tag": "beta", "momentum_reg_20_rank": 0.6, "momentum_reg_20_rank_score": 0.6, "composite_score": 0.6, "label": "positive", "contributors": ["mixed_signal"], "rank": 2},
+            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "AAA", "symbol_name": "AAA", "tag": "alpha", "momentum_reg_20": 0.8, "momentum_reg_20_score": 0.8, "composite_score": 0.8, "label": "strong", "contributors": ["mixed_signal"], "rank": 1},
+            {"time": ts, "asset_type": "etf_CN", "signal_mode": "cross_sectional", "symbol": "BBB", "symbol_name": "BBB", "tag": "beta", "momentum_reg_20": 0.6, "momentum_reg_20_score": 0.6, "composite_score": 0.6, "label": "positive", "contributors": ["mixed_signal"], "rank": 2},
         ]
     )
     market_data = pl.DataFrame(
@@ -654,8 +652,8 @@ def test_query_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPatch)
                 "symbol": "AAA",
                 "symbol_name": "AAA",
                 "tag": "alpha",
-                "momentum_reg_20_rank": 0.9,
-                "momentum_reg_20_rank_score": 0.8,
+                "momentum_reg_20": 0.9,
+                "momentum_reg_20_score": 0.8,
                 "composite_score": 0.8,
                 "label": "strong",
                 "contributors": ["mixed_signal"],
@@ -713,8 +711,8 @@ def test_backtest_etf_rotation_cli_accepts_profile(monkeypatch: pytest.MonkeyPat
                 "symbol": "AAA",
                 "symbol_name": "AAA",
                 "tag": "alpha",
-                "momentum_reg_20_rank": 0.9,
-                "momentum_reg_20_rank_score": 0.8,
+                "momentum_reg_20": 0.9,
+                "momentum_reg_20_score": 0.8,
                 "composite_score": 0.8,
                 "label": "strong",
                 "contributors": ["mixed_signal"],
@@ -880,10 +878,10 @@ def test_query_etf_rotation_requests_extra_display_factors(
                         "symbol": "159915.SZ",
                         "symbol_name": "创业板ETF易方达",
                         "tag": "growth_index",
-                        "momentum_reg_20_rank": 1.0,
+                        "momentum_reg_20": 1.0,
                         "std_score": 0.041,
                         "cv": 0.62,
-                        "momentum_reg_20_rank_score": 1.0,
+                        "momentum_reg_20_score": 1.0,
                         "composite_score": 1.0,
                         "label": "strong",
                         "contributors": ["mixed_signal"],

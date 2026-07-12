@@ -42,6 +42,7 @@ from app.analytics.factor_ic import (
     summarize_daily_ic,
 )
 from app.factors.registry import FACTOR_REGISTRY, resolve_factors
+from app.services.asset_universe import resolve_etl_symbols
 from app.utils.db import get_engine
 
 
@@ -133,13 +134,22 @@ def main(
         sys.exit(1)
 
     factor_min_cross_section = {factor.name: factor.ic_min_cross_section for factor in factors}
+    universe_symbols = resolve_etl_symbols(asset_type)
 
     logger.info(
         f"IC 分析 | asset_type={asset_type} | {start} ~ {end} | lags={lags}"
         + (f" | factors={[factor.name for factor in factors]}" if factor_names else " | 全部因子")
     )
+    logger.info(f"IC universe symbols: {len(universe_symbols)}")
 
-    df_factors = load_factors(engine, start, end, asset_type, [factor.name for factor in factors])
+    df_factors = load_factors(
+        engine,
+        start,
+        end,
+        asset_type,
+        [factor.name for factor in factors],
+        symbols=universe_symbols,
+    )
     if df_factors.is_empty():
         logger.error(
             f"factors.daily_factors 无数据 | asset_type={asset_type}，请先运行 python scripts/factor_daily.py"
@@ -149,7 +159,14 @@ def main(
     available = df_factors["factor_name"].unique().sort().to_list()
     logger.info(f"因子: {available} | 记录数: {len(df_factors)}")
 
-    df_ret = load_returns(engine, start, end, asset_type, max_lag)
+    df_ret = load_returns(
+        engine,
+        start,
+        end,
+        asset_type,
+        max_lag,
+        symbols=universe_symbols,
+    )
     if df_ret.is_empty():
         logger.error(f"market.daily 无数据 | asset_type={asset_type}")
         sys.exit(1)

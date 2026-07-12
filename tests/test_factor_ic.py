@@ -21,8 +21,8 @@ def test_compute_daily_ic_lag1_returns_expected_correlations() -> None:
     ts1 = datetime(2026, 5, 28, tzinfo=timezone.utc)
     df_factors = pl.DataFrame(
         [
-            {"time": ts0, "symbol": "AAA", "factor_name": "ret_30_rank", "factor_value": 1.0},
-            {"time": ts0, "symbol": "BBB", "factor_name": "ret_30_rank", "factor_value": 2.0},
+            {"time": ts0, "symbol": "AAA", "factor_name": "example_factor", "factor_value": 1.0},
+            {"time": ts0, "symbol": "BBB", "factor_name": "example_factor", "factor_value": 2.0},
         ]
     )
     df_ret = pl.DataFrame(
@@ -34,11 +34,11 @@ def test_compute_daily_ic_lag1_returns_expected_correlations() -> None:
         ]
     )
 
-    result = compute_daily_ic(df_factors, df_ret, 1, {"ret_30_rank": 2})
+    result = compute_daily_ic(df_factors, df_ret, 1, {"example_factor": 2})
 
     assert result.height == 1
     row = result.to_dicts()[0]
-    assert row["factor_name"] == "ret_30_rank"
+    assert row["factor_name"] == "example_factor"
     assert row["lag"] == 1
     assert row["n_stocks"] == 2
     assert row["ic"] == pytest.approx(1.0)
@@ -51,9 +51,9 @@ def test_summarize_daily_ic_returns_expected_ic_ir() -> None:
     ts2 = datetime(2026, 5, 29, tzinfo=timezone.utc)
     daily_ic = pl.DataFrame(
         [
-            {"time": ts0, "factor_name": "ret_30_rank", "lag": 5, "ic": 0.10, "rank_ic": 0.20, "n_stocks": 100},
-            {"time": ts1, "factor_name": "ret_30_rank", "lag": 5, "ic": 0.20, "rank_ic": 0.30, "n_stocks": 100},
-            {"time": ts2, "factor_name": "ret_30_rank", "lag": 5, "ic": 0.30, "rank_ic": 0.40, "n_stocks": 100},
+            {"time": ts0, "factor_name": "example_factor", "lag": 5, "ic": 0.10, "rank_ic": 0.20, "n_stocks": 100},
+            {"time": ts1, "factor_name": "example_factor", "lag": 5, "ic": 0.20, "rank_ic": 0.30, "n_stocks": 100},
+            {"time": ts2, "factor_name": "example_factor", "lag": 5, "ic": 0.30, "rank_ic": 0.40, "n_stocks": 100},
         ]
     )
 
@@ -62,7 +62,7 @@ def test_summarize_daily_ic_returns_expected_ic_ir() -> None:
     assert summary.height == 1
     row = summary.to_dicts()[0]
     assert row["lag"] == 5
-    assert row["factor_name"] == "ret_30_rank"
+    assert row["factor_name"] == "example_factor"
     assert row["mean_ic"] == pytest.approx(0.20)
     assert row["mean_rank_ic"] == pytest.approx(0.30)
     assert row["n_days"] == 3
@@ -75,9 +75,9 @@ def test_summarize_ic_window_uses_recent_window_only() -> None:
     ts2 = datetime(2026, 5, 29, tzinfo=timezone.utc)
     daily_ic = pl.DataFrame(
         [
-            {"time": ts0, "factor_name": "ret_30_rank", "lag": 10, "ic": 0.10, "rank_ic": 0.10, "n_stocks": 100},
-            {"time": ts1, "factor_name": "ret_30_rank", "lag": 10, "ic": 0.20, "rank_ic": 0.20, "n_stocks": 100},
-            {"time": ts2, "factor_name": "ret_30_rank", "lag": 10, "ic": 0.40, "rank_ic": 0.30, "n_stocks": 100},
+            {"time": ts0, "factor_name": "example_factor", "lag": 10, "ic": 0.10, "rank_ic": 0.10, "n_stocks": 100},
+            {"time": ts1, "factor_name": "example_factor", "lag": 10, "ic": 0.20, "rank_ic": 0.20, "n_stocks": 100},
+            {"time": ts2, "factor_name": "example_factor", "lag": 10, "ic": 0.40, "rank_ic": 0.30, "n_stocks": 100},
         ]
     )
 
@@ -105,7 +105,7 @@ def test_compute_daily_quantile_return_splits_into_deciles() -> None:
     ts1 = datetime(2026, 5, 28, tzinfo=timezone.utc)
     df_factors = pl.DataFrame(
         [
-            {"time": ts0, "symbol": f"S{idx:02d}", "factor_name": "ret_30_rank", "factor_value": float(idx)}
+            {"time": ts0, "symbol": f"S{idx:02d}", "factor_name": "example_factor", "factor_value": float(idx)}
             for idx in range(1, 11)
         ]
     )
@@ -120,7 +120,7 @@ def test_compute_daily_quantile_return_splits_into_deciles() -> None:
         ]
     )
 
-    result = compute_daily_quantile_return(df_factors, df_ret, 1, 10, {"ret_30_rank": 10})
+    result = compute_daily_quantile_return(df_factors, df_ret, 1, 10, {"example_factor": 10})
 
     assert result.height == 10
     lowest = result.filter(pl.col("quantile_id") == 1).to_dicts()[0]
@@ -136,7 +136,7 @@ def test_compute_daily_topk_return_returns_absolute_and_excess() -> None:
     ts1 = datetime(2026, 5, 28, tzinfo=timezone.utc)
     df_factors = pl.DataFrame(
         [
-            {"time": ts0, "symbol": f"S{idx:02d}", "factor_name": "ret_30_rank", "factor_value": float(idx)}
+            {"time": ts0, "symbol": f"S{idx:02d}", "factor_name": "example_factor", "factor_value": float(idx)}
             for idx in range(1, 11)
         ]
     )
@@ -151,7 +151,7 @@ def test_compute_daily_topk_return_returns_absolute_and_excess() -> None:
         ]
     )
 
-    result = compute_daily_topk_return(df_factors, df_ret, 1, [5, 10], {"ret_30_rank": 10})
+    result = compute_daily_topk_return(df_factors, df_ret, 1, [5, 10], {"example_factor": 10})
 
     top5 = result.filter(pl.col("top_k") == 5).to_dicts()[0]
     top10 = result.filter(pl.col("top_k") == 10).to_dicts()[0]
@@ -167,9 +167,9 @@ def test_summarize_quantile_window_uses_recent_window_only() -> None:
     ts2 = datetime(2026, 5, 29, tzinfo=timezone.utc)
     daily_quantile = pl.DataFrame(
         [
-            {"time": ts0, "factor_name": "ret_30_rank", "lag": 5, "quantile_n": 10, "quantile_id": 10, "avg_fwd_ret": 0.10, "n_stocks": 20},
-            {"time": ts1, "factor_name": "ret_30_rank", "lag": 5, "quantile_n": 10, "quantile_id": 10, "avg_fwd_ret": 0.20, "n_stocks": 20},
-            {"time": ts2, "factor_name": "ret_30_rank", "lag": 5, "quantile_n": 10, "quantile_id": 10, "avg_fwd_ret": 0.40, "n_stocks": 20},
+            {"time": ts0, "factor_name": "example_factor", "lag": 5, "quantile_n": 10, "quantile_id": 10, "avg_fwd_ret": 0.10, "n_stocks": 20},
+            {"time": ts1, "factor_name": "example_factor", "lag": 5, "quantile_n": 10, "quantile_id": 10, "avg_fwd_ret": 0.20, "n_stocks": 20},
+            {"time": ts2, "factor_name": "example_factor", "lag": 5, "quantile_n": 10, "quantile_id": 10, "avg_fwd_ret": 0.40, "n_stocks": 20},
         ]
     )
 
@@ -193,9 +193,9 @@ def test_summarize_topk_window_tracks_topk_and_excess() -> None:
     ts2 = datetime(2026, 5, 29, tzinfo=timezone.utc)
     daily_topk = pl.DataFrame(
         [
-            {"time": ts0, "factor_name": "ret_30_rank", "lag": 5, "top_k": 5, "topk_ret": 0.10, "universe_ret": 0.05, "excess_ret": 0.05, "n_stocks": 5},
-            {"time": ts1, "factor_name": "ret_30_rank", "lag": 5, "top_k": 5, "topk_ret": 0.20, "universe_ret": 0.10, "excess_ret": 0.10, "n_stocks": 5},
-            {"time": ts2, "factor_name": "ret_30_rank", "lag": 5, "top_k": 5, "topk_ret": 0.40, "universe_ret": 0.20, "excess_ret": 0.20, "n_stocks": 5},
+            {"time": ts0, "factor_name": "example_factor", "lag": 5, "top_k": 5, "topk_ret": 0.10, "universe_ret": 0.05, "excess_ret": 0.05, "n_stocks": 5},
+            {"time": ts1, "factor_name": "example_factor", "lag": 5, "top_k": 5, "topk_ret": 0.20, "universe_ret": 0.10, "excess_ret": 0.10, "n_stocks": 5},
+            {"time": ts2, "factor_name": "example_factor", "lag": 5, "top_k": 5, "topk_ret": 0.40, "universe_ret": 0.20, "excess_ret": 0.20, "n_stocks": 5},
         ]
     )
 
