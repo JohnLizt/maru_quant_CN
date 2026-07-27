@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import statistics
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -142,6 +143,153 @@ def _latest_symbol_leaderboard(period_holdings_df: pl.DataFrame, descending: boo
     return _compact_rows(grouped, 5)
 
 
+def _rolling_compounded_return(period_returns: list[float], window: int) -> float:
+    if len(period_returns) < window:
+        return 0.0
+
+    worst: float | None = None
+    for index in range(window - 1, len(period_returns)):
+        compounded = 1.0
+        for value in period_returns[index - window + 1:index + 1]:
+            compounded *= 1.0 + value
+        current = compounded - 1.0
+        worst = current if worst is None else min(worst, current)
+    return float(worst or 0.0)
+
+
+def _longest_loss_streak(period_returns: list[float]) -> int:
+    longest = 0
+    current = 0
+    for value in period_returns:
+        if value < 0.0:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
+def _period_structure_summary(periods_df: pl.DataFrame) -> dict[str, Any]:
+    if periods_df.is_empty():
+        return {
+            "weekly_return_std": 0.0,
+            "best10_period_positive_return_share": 0.0,
+            "best20_period_positive_return_share": 0.0,
+            "worst_6w_return": 0.0,
+            "worst_12w_return": 0.0,
+            "longest_loss_streak": 0,
+            "period_win_rate": 0.0,
+            "period_return_median": 0.0,
+        }
+
+    period_returns = [float(value or 0.0) for value in periods_df.get_column("period_return").to_list()]
+    positive_returns = [max(value, 0.0) for value in period_returns]
+    positive_sum = sum(positive_returns)
+    win_count = sum(1 for value in period_returns if value > 0.0)
+
+    def top_positive_share(limit: int) -> float:
+        if positive_sum <= 0.0:
+            return 0.0
+        return sum(sorted(positive_returns, reverse=True)[:limit]) / positive_sum
+
+    return {
+        "weekly_return_std": float(statistics.pstdev(period_returns)) if len(period_returns) > 1 else 0.0,
+        "best10_period_positive_return_share": top_positive_share(10),
+        "best20_period_positive_return_share": top_positive_share(20),
+        "worst_6w_return": _rolling_compounded_return(period_returns, 6),
+        "worst_12w_return": _rolling_compounded_return(period_returns, 12),
+        "longest_loss_streak": _longest_loss_streak(period_returns),
+        "period_win_rate": win_count / len(period_returns) if period_returns else 0.0,
+        "period_return_median": float(statistics.median(period_returns)) if period_returns else 0.0,
+    }
+
+
+def _asset_concentration_summary(
+    result: BacktestResult,
+    period_holdings_df: pl.DataFrame,
+) -> dict[str, Any]:
+    empty = {
+        "top1_profit_share": 0.0,
+        "top3_profit_share": 0.0,
+        "top5_profit_share": 0.0,
+        "symbol_contributor_count": 0,
+        "tag_contributor_count": 0,
+        "top_symbol_name": "",
+        "top_symbol_periods": 0,
+        "top_symbol_win_rate": 0.0,
+    }
+    if period_holdings_df.is_empty():
+        return empty
+
+    initial_capital = float(result.metrics.get("initial_capital", 0.0) or 0.0)
+    end_nav = float(result.metrics.get("end_nav", 0.0) or 0.0)
+    net_profit = end_nav - initial_capital
+    grouped = (
+        period_holdings_df.group_by("symbol")
+        .agg(
+            [
+                pl.col("tag").drop_nulls().first().alias("tag"),
+                pl.col("period_pnl").sum().alias("total_period_pnl"),
+                (pl.col("period_pnl") > 0).sum().alias("win_count"),
+                pl.len().alias("period_count"),
+            ]
+        )
+        .sort(["total_period_pnl", "symbol"], descending=[True, False])
+    )
+    rows = grouped.to_dicts()
+    if not rows:
+        return empty
+
+    ranked_pnls = [float(row["total_period_pnl"]) for row in rows]
+
+    def profit_share(limit: int) -> float:
+        if net_profit == 0.0:
+            return 0.0
+        return sum(ranked_pnls[:limit]) / net_profit
+
+    top_row = rows[0]
+    contributing_symbols = {
+        str(row["symbol"])
+        for row in rows
+        if float(row["total_period_pnl"]) != 0.0
+    }
+    contributing_tags = {
+        str(row["tag"])
+        for row in rows
+        if str(row.get("tag") or "") and float(row["total_period_pnl"]) != 0.0
+    }
+    top_periods = int(top_row["period_count"])
+    return {
+        "top1_profit_share": profit_share(1),
+        "top3_profit_share": profit_share(3),
+        "top5_profit_share": profit_share(5),
+        "symbol_contributor_count": len(contributing_symbols),
+        "tag_contributor_count": len(contributing_tags),
+        "top_symbol_name": str(top_row["symbol"]),
+        "top_symbol_periods": top_periods,
+        "top_symbol_win_rate": float(top_row["win_count"]) / top_periods if top_periods > 0 else 0.0,
+    }
+
+
+def _summary_json_payload(
+    result: BacktestResult,
+    analysis_summary: dict[str, Any],
+    context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "metrics": result.metrics,
+        "context": context or {},
+        "period_structure": analysis_summary.get("period_structure", {}),
+        "asset_concentration": analysis_summary.get("asset_concentration", {}),
+        "recent_period": analysis_summary.get("recent_period"),
+        "recent_period_holdings": analysis_summary.get("recent_period_holdings", []),
+        "best_periods": analysis_summary.get("best_periods", []),
+        "worst_periods": analysis_summary.get("worst_periods", []),
+        "top_symbols": analysis_summary.get("top_symbols", []),
+        "bottom_symbols": analysis_summary.get("bottom_symbols", []),
+    }
+
+
 def build_rebalance_period_analysis(result: BacktestResult) -> tuple[pl.DataFrame, pl.DataFrame, dict[str, Any]]:
     effective_decisions = result.effective_decisions_df
     if (
@@ -156,6 +304,8 @@ def build_rebalance_period_analysis(result: BacktestResult) -> tuple[pl.DataFram
             "recent_period_holdings": [],
             "top_symbols": [],
             "bottom_symbols": [],
+            "period_structure": _period_structure_summary(_empty_periods_frame()),
+            "asset_concentration": _asset_concentration_summary(result, _empty_period_holdings_frame()),
         }
 
     returns_rows = result.returns_df.sort("time").to_dicts()
@@ -328,6 +478,8 @@ def build_rebalance_period_analysis(result: BacktestResult) -> tuple[pl.DataFram
         "recent_period_holdings": _compact_rows(recent_holdings, 10),
         "top_symbols": _latest_symbol_leaderboard(period_holdings_df, True),
         "bottom_symbols": _latest_symbol_leaderboard(period_holdings_df, False),
+        "period_structure": _period_structure_summary(periods_df),
+        "asset_concentration": _asset_concentration_summary(result, period_holdings_df),
     }
     return periods_df, period_holdings_df, summary
 
@@ -408,6 +560,40 @@ def _log_backtest_analysis(
                 row["worst_contributor_symbol"],
                 float(row["worst_contributor_pnl"]),
             )
+
+    logger.info("=== 周期平滑度与集中度 ===")
+    period_structure = summary.get("period_structure", {})
+    logger.info(
+        "  周期胜率={} | 中位周期收益={} | 周期收益波动={} | 最长连续亏损={}期",
+        _format_pct(float(period_structure.get("period_win_rate", 0.0))),
+        _format_pct(float(period_structure.get("period_return_median", 0.0))),
+        _format_pct(float(period_structure.get("weekly_return_std", 0.0))),
+        int(period_structure.get("longest_loss_streak", 0)),
+    )
+    logger.info(
+        "  前10盈利周期占正收益={} | 前20盈利周期占正收益={} | 最差6周={} | 最差12周={}",
+        _format_pct(float(period_structure.get("best10_period_positive_return_share", 0.0))),
+        _format_pct(float(period_structure.get("best20_period_positive_return_share", 0.0))),
+        _format_pct(float(period_structure.get("worst_6w_return", 0.0))),
+        _format_pct(float(period_structure.get("worst_12w_return", 0.0))),
+    )
+
+    logger.info("=== 资产贡献集中度 ===")
+    asset_concentration = summary.get("asset_concentration", {})
+    logger.info(
+        "  top1利润占比={} | top3利润占比={} | top5利润占比={} | 贡献资产数={} | 贡献tag数={}",
+        _format_pct(float(asset_concentration.get("top1_profit_share", 0.0))),
+        _format_pct(float(asset_concentration.get("top3_profit_share", 0.0))),
+        _format_pct(float(asset_concentration.get("top5_profit_share", 0.0))),
+        int(asset_concentration.get("symbol_contributor_count", 0)),
+        int(asset_concentration.get("tag_contributor_count", 0)),
+    )
+    logger.info(
+        "  第一贡献标的={} | 出现周期={} | 持有期胜率={}",
+        asset_concentration.get("top_symbol_name", ""),
+        int(asset_concentration.get("top_symbol_periods", 0)),
+        _format_pct(float(asset_concentration.get("top_symbol_win_rate", 0.0))),
+    )
 
     logger.info("=== 最近调仓周期详情 ===")
     recent_period = summary.get("recent_period")
@@ -497,6 +683,7 @@ def export_backtest_artifacts(
         equity_curve_path = base_dir / "equity_curve.csv"
         periods_path = base_dir / "rebalance_periods.csv"
         period_holdings_path = base_dir / "rebalance_period_holdings.csv"
+        summary_path = base_dir / "summary.json"
 
         result.returns_df.write_csv(returns_path)
         result.holdings_df.write_csv(holdings_path)
@@ -504,6 +691,10 @@ def export_backtest_artifacts(
         result.equity_curve_df.write_csv(equity_curve_path)
         periods_df.write_csv(periods_path)
         period_holdings_df.write_csv(period_holdings_path)
+        summary_path.write_text(
+            json.dumps(_summary_json_payload(result, analysis_summary, summary_context), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
         chart_path = None
         if save_chart and not result.equity_curve_df.is_empty():
@@ -523,6 +714,7 @@ def export_backtest_artifacts(
             "equity_curve_csv": str(equity_curve_path),
             "rebalance_periods_csv": str(periods_path),
             "rebalance_period_holdings_csv": str(period_holdings_path),
+            "summary_json": str(summary_path),
         }
         if chart_path:
             artifact_paths["equity_chart_png"] = chart_path

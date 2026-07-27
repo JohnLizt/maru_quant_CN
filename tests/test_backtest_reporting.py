@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import io
+import json
 from datetime import date
 
 import polars as pl
+import pytest
 from loguru import logger
 
 from app.backtest.reporting import build_rebalance_period_analysis, export_backtest_artifacts
@@ -135,6 +137,11 @@ def test_build_rebalance_period_analysis_groups_by_effective_period() -> None:
     assert aaa_period["exit_reason"] == "rebalance_out"
     assert aaa_period["period_pnl"] == 10.0
     assert summary["recent_period"]["period_index"] == 2
+    assert summary["period_structure"]["period_win_rate"] == pytest.approx(1.0)
+    assert summary["period_structure"]["best10_period_positive_return_share"] == pytest.approx(1.0)
+    assert summary["asset_concentration"]["top_symbol_name"] == "AAA"
+    assert summary["asset_concentration"]["top1_profit_share"] == pytest.approx(0.5)
+    assert summary["asset_concentration"]["top3_profit_share"] == pytest.approx(1.25)
 
 
 def test_export_backtest_artifacts_writes_analysis_csv_and_logs_summary(tmp_path) -> None:
@@ -167,11 +174,39 @@ def test_export_backtest_artifacts_writes_analysis_csv_and_logs_summary(tmp_path
     assert exported.rebalance_period_holdings_df is not None
     assert (tmp_path / "rebalance_periods.csv").exists()
     assert (tmp_path / "rebalance_period_holdings.csv").exists()
+    assert (tmp_path / "summary.json").exists()
     assert exported.artifact_paths is not None
     assert "rebalance_periods_csv" in exported.artifact_paths
     assert "rebalance_period_holdings_csv" in exported.artifact_paths
+    assert "summary_json" in exported.artifact_paths
+    summary_payload = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    assert summary_payload["metrics"]["end_nav"] == 120.0
+    assert summary_payload["period_structure"]["period_win_rate"] == pytest.approx(1.0)
+    assert summary_payload["asset_concentration"]["top_symbol_name"] == "AAA"
     output = sink.getvalue()
     assert "=== 回测摘要 ===" in output
     assert "=== 核心利润来源（按调仓周期） ===" in output
+    assert "=== 周期平滑度与集中度 ===" in output
+    assert "=== 资产贡献集中度 ===" in output
     assert "=== 最近调仓周期详情 ===" in output
     assert "=== 全年主要贡献标的 ===" in output
+
+
+def test_build_rebalance_period_analysis_empty_defaults() -> None:
+    empty_result = BacktestResult(
+        holdings_df=pl.DataFrame(),
+        trades_df=pl.DataFrame(),
+        returns_df=pl.DataFrame(),
+        equity_curve_df=pl.DataFrame(),
+        metrics={"initial_capital": 100.0, "end_nav": 100.0},
+        effective_decisions_df=pl.DataFrame(),
+    )
+
+    periods_df, period_holdings_df, summary = build_rebalance_period_analysis(empty_result)
+
+    assert periods_df.is_empty()
+    assert period_holdings_df.is_empty()
+    assert summary["period_structure"]["worst_6w_return"] == 0.0
+    assert summary["period_structure"]["worst_12w_return"] == 0.0
+    assert summary["asset_concentration"]["top1_profit_share"] == 0.0
+    assert summary["asset_concentration"]["symbol_contributor_count"] == 0

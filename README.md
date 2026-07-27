@@ -160,6 +160,28 @@ docker compose build
 docker compose up -d
 ```
 
+### 2.1 Restart services after a server reboot
+
+If the machine was rebooted, bring the full local stack back with:
+
+```bash
+docker-compose up -d
+```
+
+Then verify all services are running:
+
+```bash
+docker-compose ps
+```
+
+Expected core services:
+
+- `app`
+- `timescaledb`
+- `redis`
+- `jupyter`
+- `grafana`
+
 ### 3. Verify setup
 
 Check database schemas:
