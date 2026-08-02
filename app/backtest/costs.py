@@ -1,0 +1,5 @@
+"""Shared transaction-cost assumptions for user-facing backtests."""
+
+DEFAULT_COMMISSION_BPS = 1.5
+DEFAULT_SLIPPAGE_BPS = 2.5
+DEFAULT_TOTAL_COST_BPS = DEFAULT_COMMISSION_BPS + DEFAULT_SLIPPAGE_BPS

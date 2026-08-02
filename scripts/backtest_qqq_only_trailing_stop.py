@@ -17,8 +17,10 @@ for candidate in ["/app", str(REPO_ROOT)]:
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
+from app.backtest.costs import DEFAULT_COMMISSION_BPS, DEFAULT_SLIPPAGE_BPS
 from app.backtest.reporting import export_backtest_artifacts
 from app.backtest.runner import run_backtest
+from app.utils.price_adjustment import apply_price_adjustment
 from app.strategy.qqq_enhanced import QQQOnlyTrailingStopStrategy
 from app.utils.db import get_engine
 from app.utils.logging import build_timestamped_prefix, configure_task_logger, ensure_log_directories
@@ -35,7 +37,7 @@ def _normalize_date(value: str | date | datetime) -> date:
 def _load_qqq_snapshot(start_date: date, end_date: date) -> pl.DataFrame:
     sql = text(
         """
-        SELECT time, asset_type, symbol, close
+        SELECT time, asset_type, symbol, close, adj_factor
         FROM market.daily
         WHERE asset_type = 'etf_US'
           AND symbol = 'QQQ'
@@ -53,7 +55,13 @@ def _load_qqq_snapshot(start_date: date, end_date: date) -> pl.DataFrame:
         raise RuntimeError("未加载到 QQQ 行情，无法生成 trailing stop decision")
 
     return (
-        pl.DataFrame(rows, schema=["time", "asset_type", "symbol", "close"], orient="row")
+        apply_price_adjustment(
+            pl.DataFrame(
+                rows,
+                schema=["time", "asset_type", "symbol", "close", "adj_factor"],
+                orient="row",
+            )
+        )
         .with_columns(
             [
                 pl.col("time").cast(pl.Datetime("us", "UTC")),
@@ -77,8 +85,8 @@ def main() -> int:
     parser.add_argument("--trailing-peak-window", type=int, default=252)
     parser.add_argument("--rebalance-weekday", type=int, default=2)
     parser.add_argument("--execution-lag", type=int, default=1)
-    parser.add_argument("--commission-bps", type=float, default=5.0)
-    parser.add_argument("--slippage-bps", type=float, default=5.0)
+    parser.add_argument("--commission-bps", type=float, default=DEFAULT_COMMISSION_BPS)
+    parser.add_argument("--slippage-bps", type=float, default=DEFAULT_SLIPPAGE_BPS)
     parser.add_argument("--initial-capital", type=float, default=40000.0)
     parser.add_argument("--commission-min", type=float, default=0.01)
     parser.add_argument("--cash-interest-rate", type=float, default=0.01)

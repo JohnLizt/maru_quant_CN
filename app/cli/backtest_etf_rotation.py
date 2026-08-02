@@ -4,8 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
+
+import polars as pl
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -13,9 +15,11 @@ for candidate in ["/app", str(REPO_ROOT)]:
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
+from app.backtest.baselines import build_buy_and_hold_decisions
+from app.backtest.costs import DEFAULT_COMMISSION_BPS, DEFAULT_SLIPPAGE_BPS
 from app.backtest.reporting import export_backtest_artifacts
 from app.backtest.risk_overlay import RiskOverlayConfig
-from app.backtest.runner import run_strategy_backtest
+from app.backtest.runner import _load_market_data, run_backtest, run_strategy_backtest
 from app.strategy.etf_rotation import ETFRotationCNStrategy, resolve_etf_rotation_strategy
 from app.utils.logging import build_timestamped_prefix, configure_task_logger, ensure_log_directories
 from loguru import logger
@@ -35,6 +39,46 @@ def _to_compact_rows(df, limit: int) -> list[dict]:
                 item[key] = value
         rows.append(item)
     return rows
+
+
+def _build_vti_benchmark_curve(
+    start_date: date,
+    end_date: date,
+    *,
+    commission_bps: float,
+    slippage_bps: float,
+    initial_capital: float,
+    commission_min: float,
+    cash_interest_rate: float,
+) -> pl.DataFrame:
+    market_data = _load_market_data(
+        ["etf_US"],
+        start_date,
+        end_date,
+        symbols=["VTI"],
+    )
+    if market_data.is_empty():
+        logger.warning("同期 VTI 行情为空，资金曲线将只显示 ETF Rotation")
+        return pl.DataFrame()
+
+    signal_date = market_data.get_column("time").min()
+    decisions = build_buy_and_hold_decisions("VTI", signal_date)
+    benchmark_result = run_backtest(
+        decisions,
+        asset_type="etf_US",
+        start=start_date,
+        end=end_date,
+        rebalance_frequency="daily",
+        execution_lag=0,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+        risk_config=None,
+        initial_capital=initial_capital,
+        commission_min=commission_min,
+        cash_interest_rate=cash_interest_rate,
+        market_data_override=market_data,
+    )
+    return benchmark_result.equity_curve_df
 
 
 def main(
@@ -141,16 +185,44 @@ def main(
 
     backtest_result = bundle.backtest_result
 
+    benchmark_equity_curve_df = None
+    decision_asset_types = (
+        set(bundle.decisions_df.get_column("asset_type").unique().to_list())
+        if "asset_type" in bundle.decisions_df.columns
+        else set()
+    )
+    if (
+        save_artifacts
+        and save_chart
+        and decision_asset_types == {"etf_US"}
+        and not backtest_result.returns_df.is_empty()
+    ):
+        benchmark_equity_curve_df = _build_vti_benchmark_curve(
+            backtest_result.returns_df.get_column("time").min(),
+            backtest_result.returns_df.get_column("time").max(),
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
+            initial_capital=initial_capital,
+            commission_min=commission_min,
+            cash_interest_rate=cash_interest_rate,
+        )
+    benchmark_available = (
+        benchmark_equity_curve_df is not None and not benchmark_equity_curve_df.is_empty()
+    )
+
     backtest_result = export_backtest_artifacts(
         backtest_result,
         artifacts_dir=run_dir,
-        chart_title="ETF Rotation Equity Curve",
+        chart_title="ETF Rotation vs VTI Equity Curve",
         chart_subtitle=(
             f"weekly | weekday={rebalance_weekday} | top_n={top_n} | "
             f"max_per_tag={max_per_tag} | fees={commission_bps + slippage_bps}bps"
         ),
         save_chart=save_artifacts and save_chart,
         write_artifacts=save_artifacts,
+        strategy_label="ETF Rotation",
+        benchmark_equity_curve_df=benchmark_equity_curve_df,
+        benchmark_label="VTI Buy & Hold",
         summary_context={
             "start_date": start_date,
             "end_date": end_date,
@@ -160,6 +232,10 @@ def main(
             "max_per_tag": max_per_tag,
             "total_fee_bps": commission_bps + slippage_bps,
             "risk_control": risk_control,
+            "benchmark_symbol": "VTI" if benchmark_available else None,
+            "benchmark_total_fee_bps": (
+                commission_bps + slippage_bps if benchmark_available else None
+            ),
         },
     )
 
@@ -265,8 +341,14 @@ if __name__ == "__main__":
     parser.add_argument("--max-per-tag", type=int, default=1, help="同 tag 最大持仓数，默认 1")
     parser.add_argument("--rebalance-weekday", type=int, default=2, help="周调仓日，Python weekday 语义，周一=0，默认周三=2")
     parser.add_argument("--execution-lag", type=int, default=1, help="信号到执行的交易日延迟，默认 1")
-    parser.add_argument("--commission-bps", type=float, default=5.0, help="单边手续费 bps，默认 5")
-    parser.add_argument("--slippage-bps", type=float, default=5.0, help="单边滑点 bps，默认 5")
+    parser.add_argument(
+        "--commission-bps", type=float, default=DEFAULT_COMMISSION_BPS,
+        help=f"单边手续费 bps，默认 {DEFAULT_COMMISSION_BPS:g}",
+    )
+    parser.add_argument(
+        "--slippage-bps", type=float, default=DEFAULT_SLIPPAGE_BPS,
+        help=f"单边滑点 bps，默认 {DEFAULT_SLIPPAGE_BPS:g}",
+    )
     parser.add_argument("--risk-control", action="store_true", help="启用 ETF 风险过滤/半仓/止损 overlay，默认关闭")
     parser.add_argument(
         "--risk-std-threshold",

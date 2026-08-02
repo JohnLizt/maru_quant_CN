@@ -1,4 +1,5 @@
 from app.strategy.base import BaseStrategy
+from app.strategy.dual_momentum_gem import DualMomentumGEMStrategy, build_gem_signal_snapshot
 from app.strategy.etf_rotation import (
     ETFRotationCNStrategy,
     ETFRotationUSStrategy,
@@ -10,6 +11,8 @@ from app.strategy.qqq_enhanced import QQQEnhancedFixedCoreStrategy, QQQOnlyStrat
 
 __all__ = [
     "BaseStrategy",
+    "DualMomentumGEMStrategy",
+    "build_gem_signal_snapshot",
     "MomentumStrategy",
     "ETFUniverseRotationStrategy",
     "ETFRotationCNStrategy",

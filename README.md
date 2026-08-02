@@ -265,6 +265,9 @@ docker compose exec app python app/cli/query_etf_rotation.py --date 2026-05-29 -
 
 ### Run ETF rotation backtest
 
+回测入口默认采用单边 `4bps` 交易成本，其中手续费 `1.5bps`、滑点 `2.5bps`；
+可通过 `--commission-bps` 和 `--slippage-bps` 覆盖。
+
 ```bash
 docker compose exec app python app/cli/backtest_etf_rotation.py --start-date 2025-06-03 --end-date 2026-05-29
 docker compose exec app python app/cli/backtest_etf_rotation.py --start-date 2025-06-03 --end-date 2026-05-29 --format json

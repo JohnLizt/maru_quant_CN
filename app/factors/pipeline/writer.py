@@ -3,6 +3,9 @@
 """
 from __future__ import annotations
 
+import csv
+import io
+
 import polars as pl
 from sqlalchemy import text
 
@@ -20,19 +23,51 @@ def upsert_factors(engine, df: pl.DataFrame, *, asset_type: str | None = None) -
             asset_type = "stock_CN"
         df = df.with_columns(pl.lit(asset_type).alias("asset_type"))
 
-    rows = df.to_dicts()
+    ordered_columns = ["time", "asset_type", "symbol", "factor_name", "factor_value"]
+    rows = df.select(ordered_columns).to_dicts()
     with engine.begin() as conn:
+        conn.execute(text("SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0"))
         conn.execute(
             text(
                 """
+                CREATE TEMP TABLE _daily_factors_upsert (
+                    time TIMESTAMPTZ NOT NULL,
+                    asset_type VARCHAR(32) NOT NULL,
+                    symbol VARCHAR(32) NOT NULL,
+                    factor_name VARCHAR(64) NOT NULL,
+                    factor_value DOUBLE PRECISION
+                ) ON COMMIT DROP
+                """
+            )
+        )
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer, delimiter="\t", lineterminator="\n", quoting=csv.QUOTE_MINIMAL)
+        for row in rows:
+            writer.writerow(["\\N" if row[column] is None else row[column] for column in ordered_columns])
+        buffer.seek(0)
+        with conn.connection.driver_connection.cursor() as cursor:
+            cursor.copy_expert(
+                """
+                COPY _daily_factors_upsert (time, asset_type, symbol, factor_name, factor_value)
+                FROM STDIN WITH (FORMAT CSV, DELIMITER E'\\t', NULL '\\N')
+                """,
+                buffer,
+            )
+
+        result = conn.execute(
+            text(
+                """
                 INSERT INTO factors.daily_factors (time, asset_type, symbol, factor_name, factor_value)
-                VALUES (:time, :asset_type, :symbol, :factor_name, :factor_value)
+                SELECT time, asset_type, symbol, factor_name, factor_value
+                FROM _daily_factors_upsert
                 ON CONFLICT (time, asset_type, symbol, factor_name) DO UPDATE SET
                     factor_value = EXCLUDED.factor_value
                 """
-            ),
-            rows,
+            )
         )
+        if result.rowcount != len(rows):
+            raise RuntimeError(f"因子更新行数不一致: expected={len(rows)}, actual={result.rowcount}")
     return len(rows)
 
 

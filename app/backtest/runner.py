@@ -9,8 +9,10 @@ import polars as pl
 from loguru import logger
 from sqlalchemy import text
 
+from app.backtest.costs import DEFAULT_COMMISSION_BPS, DEFAULT_SLIPPAGE_BPS
 from app.backtest.metrics import compute_metrics
 from app.backtest.risk_overlay import RiskOverlayConfig, build_risk_features, get_risk_reason
+from app.utils.price_adjustment import apply_price_adjustment
 from app.services.strategy_service import StrategySnapshotBundle, build_strategy_snapshot
 from app.strategy.base import BaseStrategy
 from app.utils.db import get_engine
@@ -62,26 +64,39 @@ def _normalize_date(value: str | date | datetime) -> date:
     return datetime.strptime(str(value), "%Y-%m-%d").date()
 
 
-def _load_market_data(asset_types: list[str], start_date: date, end_date: date) -> pl.DataFrame:
+def _apply_total_return_adjustment(market_data: pl.DataFrame) -> pl.DataFrame:
+    """Adjust OHLC prices with the persisted Adj Close / Close factor."""
+    return apply_price_adjustment(market_data)
+
+
+def _load_market_data(
+    asset_types: list[str],
+    start_date: date,
+    end_date: date,
+    *,
+    symbols: list[str] | None = None,
+) -> pl.DataFrame:
+    symbol_filter = " AND symbol = ANY(:symbols)" if symbols else ""
     sql = text(
-        """
-        SELECT time, asset_type, symbol, open, high, low, close, amount, pct_change
+        f"""
+        SELECT time, asset_type, symbol, open, high, low, close, amount, adj_factor, pct_change
         FROM market.daily
         WHERE asset_type = ANY(:asset_types)
           AND time >= :start_date
           AND time <= :end_date
+          {symbol_filter}
         ORDER BY time, asset_type, symbol
         """
     )
+    params = {
+        "asset_types": asset_types,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+    }
+    if symbols:
+        params["symbols"] = [symbol.strip().upper() for symbol in symbols]
     with get_engine().connect() as conn:
-        rows = conn.execute(
-            sql,
-            {
-                "asset_types": asset_types,
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat(),
-            },
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
 
     schema = {
         "time": pl.Date,
@@ -98,10 +113,21 @@ def _load_market_data(asset_types: list[str], start_date: date, end_date: date) 
     if not rows:
         return pl.DataFrame(schema=schema)
 
-    return (
+    market_data = (
         pl.DataFrame(
             rows,
-            schema=["time", "asset_type", "symbol", "open", "high", "low", "close", "amount", "pct_change"],
+            schema=[
+                "time",
+                "asset_type",
+                "symbol",
+                "open",
+                "high",
+                "low",
+                "close",
+                "amount",
+                "adj_factor",
+                "pct_change",
+            ],
             orient="row",
         )
         .with_columns(
@@ -113,13 +139,29 @@ def _load_market_data(asset_types: list[str], start_date: date, end_date: date) 
                 pl.col("low").cast(pl.Float64),
                 pl.col("close").cast(pl.Float64),
                 pl.col("amount").cast(pl.Float64),
+                pl.col("adj_factor").cast(pl.Float64),
                 (pl.col("pct_change").cast(pl.Float64) / 100.0).alias("daily_return"),
                 ((pl.col("open") + pl.col("high") + pl.col("low") + pl.col("close")) / 4.0).alias("ohlc4"),
             ]
         )
-        .select(["time", "asset_type", "symbol", "open", "high", "low", "close", "amount", "daily_return", "ohlc4"])
+        .select(
+            [
+                "time",
+                "asset_type",
+                "symbol",
+                "open",
+                "high",
+                "low",
+                "close",
+                "amount",
+                "adj_factor",
+                "daily_return",
+                "ohlc4",
+            ]
+        )
         .sort(["time", "asset_type", "symbol"])
     )
+    return _apply_total_return_adjustment(market_data)
 
 
 def _empty_holdings_frame() -> pl.DataFrame:
@@ -208,6 +250,23 @@ def _filter_rebalance_dates(
 ) -> pl.DataFrame:
     if rebalance_frequency == "daily":
         return decisions
+    if rebalance_frequency == "monthly":
+        if decisions.is_empty():
+            return decisions
+        return (
+            decisions.with_columns(
+                pl.col("time").dt.year().alias("_rebalance_year"),
+                pl.col("time").dt.month().alias("_rebalance_month"),
+            )
+            .with_columns(
+                pl.col("time")
+                .max()
+                .over(["_rebalance_year", "_rebalance_month"])
+                .alias("_month_last_time")
+            )
+            .filter(pl.col("time") == pl.col("_month_last_time"))
+            .drop(["_rebalance_year", "_rebalance_month", "_month_last_time"])
+        )
     if rebalance_frequency not in {"weekly", "biweekly"}:
         raise NotImplementedError(f"暂不支持的调仓频率: {rebalance_frequency}")
     if rebalance_weekday is None:
@@ -226,6 +285,32 @@ def _filter_rebalance_dates(
     })
     biweekly_dates = selected_dates[::2]
     return weekday_filtered.filter(pl.col("time").dt.date().is_in(biweekly_dates))
+
+
+def _build_cash_return_map(cash_return_series: pl.DataFrame | None) -> dict[date, float]:
+    if cash_return_series is None or cash_return_series.is_empty():
+        return {}
+    missing_columns = {"time", "cash_return"} - set(cash_return_series.columns)
+    if missing_columns:
+        raise ValueError(f"cash_return_series 缺少列: {sorted(missing_columns)}")
+
+    normalized = cash_return_series.select(
+        pl.col("time").cast(pl.Date),
+        pl.col("cash_return").cast(pl.Float64),
+    )
+    if normalized.get_column("time").n_unique() != normalized.height:
+        raise ValueError("cash_return_series 的 time 不能重复")
+    invalid = normalized.filter(
+        pl.col("cash_return").is_null()
+        | ~pl.col("cash_return").is_finite()
+        | (pl.col("cash_return") <= -1.0)
+    )
+    if not invalid.is_empty():
+        raise ValueError("cash_return_series 的 cash_return 必须有限且大于 -1")
+    return {
+        row["time"]: float(row["cash_return"])
+        for row in normalized.iter_rows(named=True)
+    }
 
 
 def _build_effective_decisions(
@@ -359,6 +444,7 @@ def run_backtest(
     initial_capital: float = 40000.0,
     commission_min: float = 0.01,
     cash_interest_rate: float = 0.01,
+    cash_return_series: pl.DataFrame | None = None,
     market_data_override: pl.DataFrame | None = None,
 ) -> BacktestResult:
     """Run a cash-account backtest from StrategyDecisionTable rows."""
@@ -372,7 +458,10 @@ def run_backtest(
     if initial_capital <= 0:
         raise ValueError("initial_capital 必须大于 0")
     logger.info(
-        "开始回测 | asset_type={} | start={} | end={} | rebalance_frequency={} | rebalance_weekday={} | execution_lag={} | commission_bps={} | slippage_bps={} | risk_control={} | initial_capital={} | commission_min={} | cash_interest_rate={}",
+        "开始回测 | asset_type={} | start={} | end={} | rebalance_frequency={} | "
+        "rebalance_weekday={} | execution_lag={} | commission_bps={} | slippage_bps={} | "
+        "risk_control={} | initial_capital={} | commission_min={} | cash_interest_rate={} | "
+        "dynamic_cash_return={}",
         asset_type or "ALL",
         start_date,
         end_date,
@@ -385,6 +474,7 @@ def run_backtest(
         initial_capital,
         commission_min,
         cash_interest_rate,
+        cash_return_series is not None,
     )
 
     required_columns = {
@@ -428,7 +518,13 @@ def run_backtest(
         str(current)
         for current in filtered.get_column("asset_type").drop_nulls().unique().to_list()
     })
-    market_data = market_data_override if market_data_override is not None else _load_market_data(decision_asset_types, start_date, end_date)
+    market_data = (
+        market_data_override
+        if market_data_override is not None
+        else _load_market_data(decision_asset_types, start_date, end_date)
+    )
+    if market_data_override is not None:
+        market_data = _apply_total_return_adjustment(market_data)
     logger.info("市场行情记录数: {}", market_data.height)
     trading_dates = sorted({current for current in market_data.get_column("time").to_list() if current is not None})
     effective_decisions = _build_effective_decisions(filtered, trading_dates, execution_lag, start_date, end_date)
@@ -488,6 +584,7 @@ def run_backtest(
     backtest_dates = [current for current in trading_dates if first_active_date <= current <= end_date]
     cost_rate = (commission_bps + slippage_bps) / 10000.0
     daily_interest_rate = cash_interest_rate / 365.0
+    cash_return_map = _build_cash_return_map(cash_return_series)
 
     cash = initial_capital
     positions: dict[tuple[str, str], PositionState] = {}
@@ -715,7 +812,7 @@ def run_backtest(
                 )
                 rebalance_trade_events += 1
 
-        cash *= 1.0 + daily_interest_rate
+        cash *= 1.0 + cash_return_map.get(current_date, daily_interest_rate)
         market_value = _position_nav(positions, price_map, current_date)
         nav = cash + market_value
         cash_ratio = cash / nav if nav > 0 else 0.0
@@ -810,8 +907,8 @@ def run_strategy_backtest(
     rebalance_frequency: str = "weekly",
     rebalance_weekday: int | None = 2,
     execution_lag: int = 1,
-    commission_bps: float = 5.0,
-    slippage_bps: float = 5.0,
+    commission_bps: float = DEFAULT_COMMISSION_BPS,
+    slippage_bps: float = DEFAULT_SLIPPAGE_BPS,
     log_path: str | None = None,
     artifacts_dir: str | None = None,
     equity_chart_path: str | None = None,
@@ -820,6 +917,7 @@ def run_strategy_backtest(
     initial_capital: float = 40000.0,
     commission_min: float = 0.01,
     cash_interest_rate: float = 0.01,
+    cash_return_series: pl.DataFrame | None = None,
 ) -> StrategyBacktestBundle:
     """Build signal snapshot + strategy decisions, then run a cash-account backtest."""
 
@@ -847,6 +945,7 @@ def run_strategy_backtest(
         initial_capital=initial_capital,
         commission_min=commission_min,
         cash_interest_rate=cash_interest_rate,
+        cash_return_series=cash_return_series,
     )
     result.log_path = log_path
     result.artifacts_dir = artifacts_dir

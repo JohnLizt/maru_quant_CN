@@ -6,6 +6,8 @@ from __future__ import annotations
 import polars as pl
 from sqlalchemy import text
 
+from app.utils.price_adjustment import DEFAULT_PRICE_COLUMNS, apply_price_adjustment
+
 
 DEFAULT_SCHEMA = {
     "time": pl.Datetime("us", "UTC"),
@@ -18,6 +20,7 @@ DEFAULT_SCHEMA = {
     "volume": pl.Int64,
     "amount": pl.Float64,
     "is_suspended": pl.Boolean,
+    "adj_factor": pl.Float64,
 }
 
 
@@ -72,12 +75,15 @@ def load_ohlcv(engine, asset_type: str, symbol: str, start: str, end: str, field
         if column in requested
     ]
     schema = {column: DEFAULT_SCHEMA[column] for column in ordered_columns}
+    should_adjust = bool(set(DEFAULT_PRICE_COLUMNS) & set(ordered_columns))
+    query_columns = [*ordered_columns, "adj_factor"] if should_adjust else ordered_columns
+    query_schema = {column: DEFAULT_SCHEMA[column] for column in query_columns}
 
     with engine.connect() as conn:
         rows = conn.execute(
             text(
                 f"""
-                SELECT {', '.join(ordered_columns)}
+                SELECT {', '.join(query_columns)}
                 FROM market.daily
                 WHERE asset_type = :asset_type
                   AND symbol = :symbol
@@ -89,7 +95,8 @@ def load_ohlcv(engine, asset_type: str, symbol: str, start: str, end: str, field
         ).fetchall()
     if not rows:
         return pl.DataFrame(schema=schema)
-    return pl.DataFrame(rows, schema=ordered_columns, orient="row").cast(schema)
+    loaded = pl.DataFrame(rows, schema=query_columns, orient="row").cast(query_schema)
+    return apply_price_adjustment(loaded).cast(schema)
 
 
 def load_ohlcv_panel(
@@ -110,6 +117,9 @@ def load_ohlcv_panel(
         if column in requested
     ]
     schema = {column: DEFAULT_SCHEMA[column] for column in ordered_columns}
+    should_adjust = bool(set(DEFAULT_PRICE_COLUMNS) & set(ordered_columns))
+    query_columns = [*ordered_columns, "adj_factor"] if should_adjust else ordered_columns
+    query_schema = {column: DEFAULT_SCHEMA[column] for column in query_columns}
 
     if not symbols:
         return pl.DataFrame(schema=schema)
@@ -126,7 +136,7 @@ def load_ohlcv_panel(
         rows = conn.execute(
             text(
                 f"""
-                SELECT {', '.join(ordered_columns)}
+                SELECT {', '.join(query_columns)}
                 FROM market.daily
                 WHERE asset_type = :asset_type
                   AND symbol IN ({placeholders})
@@ -138,4 +148,5 @@ def load_ohlcv_panel(
         ).fetchall()
     if not rows:
         return pl.DataFrame(schema=schema)
-    return pl.DataFrame(rows, schema=ordered_columns, orient="row").cast(schema)
+    loaded = pl.DataFrame(rows, schema=query_columns, orient="row").cast(query_schema)
+    return apply_price_adjustment(loaded).cast(schema)

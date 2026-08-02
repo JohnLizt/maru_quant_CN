@@ -27,6 +27,7 @@ def _empty_daily_frame() -> pl.DataFrame:
             "high": pl.Float64,
             "low": pl.Float64,
             "close": pl.Float64,
+            "adj_factor": pl.Float64,
             "volume": pl.Int64,
             "amount": pl.Float64,
             "pct_change": pl.Float64,
@@ -71,6 +72,7 @@ def _build_daily_frame(df_pd: pd.DataFrame, asset_type: str, symbol: str) -> pl.
     frame["high"] = pd.to_numeric(frame.get("high"), errors="coerce")
     frame["low"] = pd.to_numeric(frame.get("low"), errors="coerce")
     frame["close"] = pd.to_numeric(frame.get("close"), errors="coerce")
+    frame["adj_factor"] = (pct_source / frame["close"]).where(frame["close"] > 0).fillna(1.0)
     frame["volume"] = pd.to_numeric(frame.get("volume"), errors="coerce").fillna(0)
     frame["amount"] = frame["close"] * frame["volume"]
     frame["pct_change"] = pct_source.pct_change() * 100.0
@@ -92,6 +94,7 @@ def _build_daily_frame(df_pd: pd.DataFrame, asset_type: str, symbol: str) -> pl.
                 pl.col("high").cast(pl.Float64),
                 pl.col("low").cast(pl.Float64),
                 pl.col("close").cast(pl.Float64),
+                pl.col("adj_factor").cast(pl.Float64),
                 pl.col("volume").round(0).cast(pl.Int64),
                 pl.col("amount").cast(pl.Float64),
                 pl.col("pct_change").cast(pl.Float64),
@@ -110,6 +113,7 @@ def _build_daily_frame(df_pd: pd.DataFrame, asset_type: str, symbol: str) -> pl.
                 "high",
                 "low",
                 "close",
+                "adj_factor",
                 "volume",
                 "amount",
                 "pct_change",

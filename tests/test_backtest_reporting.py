@@ -192,6 +192,30 @@ def test_export_backtest_artifacts_writes_analysis_csv_and_logs_summary(tmp_path
     assert "=== 全年主要贡献标的 ===" in output
 
 
+def test_export_backtest_artifacts_writes_and_plots_benchmark_curve(tmp_path) -> None:
+    result = _sample_backtest_result()
+    benchmark_curve = result.equity_curve_df.with_columns(
+        (pl.col("equity_curve") * 1.1).alias("equity_curve")
+    )
+
+    exported = export_backtest_artifacts(
+        result,
+        artifacts_dir=tmp_path,
+        chart_title="Strategy vs Benchmark",
+        save_chart=True,
+        benchmark_equity_curve_df=benchmark_curve,
+        strategy_label="Rotation",
+        benchmark_label="VTI",
+    )
+
+    assert (tmp_path / "benchmark_equity_curve.csv").exists()
+    assert (tmp_path / "equity.png").exists()
+    assert exported.artifact_paths is not None
+    assert exported.artifact_paths["benchmark_equity_curve_csv"].endswith(
+        "benchmark_equity_curve.csv"
+    )
+
+
 def test_build_rebalance_period_analysis_empty_defaults() -> None:
     empty_result = BacktestResult(
         holdings_df=pl.DataFrame(),

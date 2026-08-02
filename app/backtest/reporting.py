@@ -24,6 +24,9 @@ def plot_equity_curve(
     *,
     title: str,
     subtitle: str | None = None,
+    strategy_label: str = "Strategy",
+    benchmark_equity_curve_df: pl.DataFrame | None = None,
+    benchmark_label: str = "Benchmark",
 ) -> Path:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -35,13 +38,25 @@ def plot_equity_curve(
     y = equity_curve_df.get_column("equity_curve").cast(float).to_list()
 
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(x, y, linewidth=2.0, color="#1f77b4")
-    ax.set_title(title)
+    ax.plot(x, y, linewidth=2.2, color="#1f77b4", label=strategy_label)
+    if benchmark_equity_curve_df is not None and not benchmark_equity_curve_df.is_empty():
+        benchmark_x = benchmark_equity_curve_df.get_column("time").to_list()
+        benchmark_y = benchmark_equity_curve_df.get_column("equity_curve").cast(float).to_list()
+        ax.plot(
+            benchmark_x,
+            benchmark_y,
+            linewidth=1.8,
+            color="#d97706",
+            linestyle="--",
+            label=benchmark_label,
+        )
+    ax.set_title(title, fontsize=15, pad=28)
     if subtitle:
-        ax.text(0.5, 1.02, subtitle, transform=ax.transAxes, ha="center", va="bottom", fontsize=10)
+        ax.text(0.5, 1.01, subtitle, transform=ax.transAxes, ha="center", va="bottom", fontsize=10)
     ax.set_xlabel("Date")
     ax.set_ylabel("Equity Curve")
     ax.grid(alpha=0.3)
+    ax.legend(loc="upper left", frameon=False)
     fig.autofmt_xdate()
     fig.tight_layout()
     fig.savefig(output, dpi=160)
@@ -667,6 +682,9 @@ def export_backtest_artifacts(
     save_chart: bool = True,
     write_artifacts: bool = True,
     summary_context: dict[str, Any] | None = None,
+    strategy_label: str = "Strategy",
+    benchmark_equity_curve_df: pl.DataFrame | None = None,
+    benchmark_label: str = "Benchmark",
 ) -> BacktestResult:
     base_dir = Path(artifacts_dir)
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -684,11 +702,14 @@ def export_backtest_artifacts(
         periods_path = base_dir / "rebalance_periods.csv"
         period_holdings_path = base_dir / "rebalance_period_holdings.csv"
         summary_path = base_dir / "summary.json"
+        benchmark_equity_curve_path = base_dir / "benchmark_equity_curve.csv"
 
         result.returns_df.write_csv(returns_path)
         result.holdings_df.write_csv(holdings_path)
         result.trades_df.write_csv(trades_path)
         result.equity_curve_df.write_csv(equity_curve_path)
+        if benchmark_equity_curve_df is not None and not benchmark_equity_curve_df.is_empty():
+            benchmark_equity_curve_df.write_csv(benchmark_equity_curve_path)
         periods_df.write_csv(periods_path)
         period_holdings_df.write_csv(period_holdings_path)
         summary_path.write_text(
@@ -704,6 +725,9 @@ def export_backtest_artifacts(
                     base_dir / "equity.png",
                     title=chart_title,
                     subtitle=chart_subtitle,
+                    strategy_label=strategy_label,
+                    benchmark_equity_curve_df=benchmark_equity_curve_df,
+                    benchmark_label=benchmark_label,
                 )
             )
 
@@ -718,6 +742,8 @@ def export_backtest_artifacts(
         }
         if chart_path:
             artifact_paths["equity_chart_png"] = chart_path
+        if benchmark_equity_curve_df is not None and not benchmark_equity_curve_df.is_empty():
+            artifact_paths["benchmark_equity_curve_csv"] = str(benchmark_equity_curve_path)
 
     return replace(
         result,

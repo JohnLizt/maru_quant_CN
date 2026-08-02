@@ -23,6 +23,7 @@ for candidate in ["/app", str(REPO_ROOT)]:
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
+from app.backtest.costs import DEFAULT_COMMISSION_BPS, DEFAULT_SLIPPAGE_BPS
 from app.backtest.reporting import build_rebalance_period_analysis
 from app.backtest.runner import _load_market_data, run_backtest
 from app.backtest.risk_overlay import RiskOverlayConfig
@@ -703,8 +704,8 @@ def main() -> int:
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
     parser.add_argument("--rebalance-weekday", type=int, default=2)
     parser.add_argument("--execution-lag", type=int, default=1)
-    parser.add_argument("--commission-bps", type=float, default=5.0)
-    parser.add_argument("--slippage-bps", type=float, default=5.0)
+    parser.add_argument("--commission-bps", type=float, default=DEFAULT_COMMISSION_BPS)
+    parser.add_argument("--slippage-bps", type=float, default=DEFAULT_SLIPPAGE_BPS)
     parser.add_argument("--initial-capital", type=float, default=40000.0)
     parser.add_argument("--commission-min", type=float, default=0.01)
     parser.add_argument("--cash-interest-rate", type=float, default=0.01)

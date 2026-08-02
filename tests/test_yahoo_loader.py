@@ -72,6 +72,7 @@ def test_yahoo_loader_fetch_daily_by_symbol_normalizes_schema(monkeypatch: pytes
         "high",
         "low",
         "close",
+        "adj_factor",
         "volume",
         "amount",
         "pct_change",
@@ -84,6 +85,7 @@ def test_yahoo_loader_fetch_daily_by_symbol_normalizes_schema(monkeypatch: pytes
     assert df.get_column("data_source").to_list() == ["yahoo", "yahoo"]
     assert df.get_column("volume").to_list() == [1000, 1200]
     assert df.get_column("amount").to_list() == [100000.0, 122400.0]
+    assert df.get_column("adj_factor").to_list() == pytest.approx([1.0, 101.0 / 102.0])
     assert df.get_column("is_suspended").to_list() == [False, False]
     assert df.get_column("pct_change").to_list()[0] is None
     assert df.get_column("pct_change").to_list()[1] == pytest.approx(1.0)
